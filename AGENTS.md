@@ -86,8 +86,8 @@ and add a record when you make a call the code alone will not explain.
 
 A pull request that bumps the version in `Cargo.toml`, and the install
 commands in the README with it, is the whole release: once it is merged, the
-release workflow tags that commit and publishes it (0035). Bump only when
-dbt-lens relies on a change (0034).
+release workflow tags that commit and publishes it (0035). Bump when dbt-lens
+relies on a change, or for a release worth installing (0034).
 
 ## Layout
 
