@@ -46,3 +46,16 @@ and `--version` disagree, and the install commands in the README with it.
 
 The cache hash in the AGENTS.md comparison leaves `producer` out, as it leaves
 out `generated_at`: a bump changes it without moving an edge.
+
+## Amended the same day
+
+0.2.0 is released with nothing in dbt-lens relying on it. A BigQuery relation
+is now matched through its backticks, so its edges reach the dbt nodes instead
+of leaving through `rel:`, and a catalog entry for another target's table is
+set aside (0037). Both change what the cache holds for someone's project, which
+is worth installing. The floor above is what dbt-lens accepts, and a release
+does not move it.
+
+So the version also moves for a release worth installing. Below 1.0, a new
+behaviour or a new field in the report moves the minor, and a fix alone the
+patch. dbt-lens's floor still moves only when it relies on a change.

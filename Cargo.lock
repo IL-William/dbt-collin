@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "collin-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "collin-core",
  "serde_json",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "collin-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flowscope-core",
  "serde",
