@@ -3120,4 +3120,78 @@ mod tests {
             }])
         );
     }
+
+    /// A public project, read from the manifest and the catalog dbt wrote for
+    /// it, where every other test hands the pass what a test wrote (0038). The
+    /// caches it gave are committed beside it, so an edge that moves fails here.
+    /// One meant to move is accepted with `COLLIN_BLESS=1`, and the diff of
+    /// `expected/` is what the pull request then shows.
+    fn gives_the_caches_committed_beside_it(fixture: &str) {
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(fixture);
+        let target = Target::new(fixture);
+        for (indirect, name) in [(false, "cache.json"), (true, "cache.indirect.json")] {
+            let mut o = Options::new(project.clone());
+            o.indirect = indirect;
+            o.out = target.0.join(name);
+            o.report = target.0.join("report.json");
+            generate(&o).unwrap();
+            let read = |p: &Path| -> serde_json::Value {
+                serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+            };
+            let mut got = read(&o.out);
+            // What two runs of the same code differ in, as AGENTS.md hashes it.
+            let fields = got.as_object_mut().unwrap();
+            fields.remove("generated_at");
+            fields.remove("producer");
+
+            let expected = project.join("expected").join(name);
+            if std::env::var_os("COLLIN_BLESS").is_some() {
+                std::fs::write(&expected, one_edge_a_line(&got)).unwrap();
+                continue;
+            }
+            let want = read(&expected);
+            if got == want {
+                continue;
+            }
+            let edges = |v: &serde_json::Value| -> HashSet<String> {
+                v["edges"].as_array().unwrap().iter().map(|e| e.to_string()).collect()
+            };
+            let (w, g) = (edges(&want), edges(&got));
+            let only = |a: &HashSet<String>, b: &HashSet<String>| -> String {
+                let mut v: Vec<&String> = a.difference(b).collect();
+                v.sort();
+                let shown: String = v.iter().take(40).map(|e| format!("\n  {e}")).collect();
+                format!(" {}{shown}", v.len())
+            };
+            panic!(
+                "{fixture}/expected/{name} moved\ngone:{}\nnew:{}\n(both 0: the order or a field moved)\n\
+                 Read why, then accept it with COLLIN_BLESS=1 cargo test --release committed_beside",
+                only(&w, &g),
+                only(&g, &w),
+            );
+        }
+    }
+
+    /// The cache with one edge a line, so that the diff of an expected cache
+    /// shows each edge that moved and nothing else.
+    fn one_edge_a_line(cache: &serde_json::Value) -> String {
+        let mut head = cache.clone();
+        let edges = head.as_object_mut().unwrap().remove("edges").unwrap();
+        let head = head.to_string();
+        let lines: Vec<String> = edges.as_array().unwrap().iter().map(|e| e.to_string()).collect();
+        format!("{},\"edges\":[\n{}\n]}}\n", &head[..head.len() - 1], lines.join(",\n"))
+    }
+
+    #[test]
+    fn jaffle_shop_gives_the_caches_committed_beside_it() {
+        gives_the_caches_committed_beside_it("jaffle_shop");
+    }
+
+    /// Fivetran's Shopify package: SQL written for production, ephemeral models
+    /// inlined as CTEs, and staging models whose columns the package fills from
+    /// what each source turns out to have.
+    #[test]
+    fn shopify_gives_the_caches_committed_beside_it() {
+        gives_the_caches_committed_beside_it("shopify");
+    }
 }

@@ -1,0 +1,13 @@
+packages:
+  - local: ../
+    name: shopify
+  - name: fivetran_utils
+    package: fivetran/fivetran_utils
+    version: 0.4.13
+  - name: spark_utils
+    package: dbt-labs/spark_utils
+    version: 0.3.3
+  - name: dbt_utils
+    package: dbt-labs/dbt_utils
+    version: 1.4.1
+sha1_hash: de2deba3d66ce03d8c02949013650cc9b94f6030

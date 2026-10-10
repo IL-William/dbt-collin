@@ -1,6 +1,6 @@
 /target
-# The real dbt corpus never enters this repository: fixtures are invented (0014
-# in dbt-lens). Point --project at a checkout outside the tree instead.
+# The real dbt corpus never enters this repository: fixtures are invented (0007),
+# or public (0038). Point --project at a checkout outside the tree instead.
 /corpus
 *.report.json
 column_lineage.json
