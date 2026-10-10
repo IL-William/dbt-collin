@@ -315,6 +315,11 @@ pub fn run_observed(
             None => Vec::new(),
         };
         let own = norm_relation(&model.relation);
+        // Every value in a model that reads no relation but its own is one of
+        // its earlier rows, a literal, or something written outside dbt: none of
+        // its columns has a parent to find, and calling them lost would send a
+        // reader looking for one (0039).
+        let reads_only_itself = !resolved.reads.is_empty() && resolved.reads.iter().all(|r| *r == own);
         let undeclared_relations = undeclared(&own, &dependencies(project, model), &resolved.reads);
         // A compiled file reading a relation the manifest does not give its
         // model was compiled against another graph: another target, or code
@@ -387,14 +392,18 @@ pub fn run_observed(
         // counting it as a miss would understate coverage and send a reader
         // looking for something the SQL says is not there.
         let roots: HashSet<&str> = resolved.roots.iter().map(String::as_str).collect();
+        let own_only = |c: &&String| {
+            reads_only_itself && !roots.contains(c.as_str()) && !produced.contains(c.as_str())
+        };
         if let Some(independent) = store.warehouse(&model.uid).or_else(|| store.declared(&model.uid))
         {
-            let judged = independent.iter().filter(|c| !roots.contains(c.as_str()));
+            let judged = independent.iter().filter(|c| !roots.contains(c.as_str()) && !own_only(c));
             rep.totals.columns_total_independent += judged.clone().count();
             rep.totals.columns_covered_independent +=
                 judged.filter(|c| produced.contains(c.as_str())).count();
             rep.totals.columns_root +=
                 independent.iter().filter(|c| roots.contains(c.as_str())).count();
+            rep.totals.columns_self += independent.iter().filter(own_only).count();
         }
 
         let missing_columns = match store.warehouse(&model.uid) {
@@ -416,6 +425,7 @@ pub fn run_observed(
         // its edges come from inference, so what its SQL lost is not what the
         // cache lacks.
         let lost = match plan {
+            _ if reads_only_itself => Vec::new(),
             Plan::Parsed => lost_columns(&resolved, &parents, &published.bridged),
             // The columns both have. The table's others went out by name or not
             // at all, and the compile's others on no rung.
@@ -550,7 +560,10 @@ pub fn run_observed(
             && !gap
             && lost.is_empty()
             && unbacked.is_empty()
-            && !unexplained;
+            && !unexplained
+            // Its columns are counted apart from the roots and named nowhere
+            // else, so the model is named here (0017, 0039).
+            && !reads_only_itself;
         {
             let entry = ModelReport {
                 name: model.name.clone(),
@@ -558,6 +571,7 @@ pub fn run_observed(
                 file: model.file.clone(),
                 sql_file: model.sql_source.file().map(str::to_string),
                 sql_file_set_aside: foreign,
+                reads_only_itself,
                 provenance,
                 agreement: agreement.as_str(),
                 parse_error: resolved.parse_error.clone(),
@@ -1533,6 +1547,31 @@ mod tests {
     fn a_known_relation_becomes_its_dbt_id() {
         let p = project();
         assert_eq!(node_for(&p, &HashMap::new(), "DB.SCH.PARENT"), "model.p.parent");
+    }
+
+    #[test]
+    fn a_model_reading_only_itself_has_no_parent_to_find() {
+        // An audit table something outside dbt writes, which dbt compiles as a
+        // read of itself, beside an incremental model whose self read filters.
+        let mut src = node("source.p.s.raw", "db.s.raw", &[], &[]);
+        src.1.kind = "source".into();
+        let mut log = node("model.p.log", "db.sch.log", &[], &[]);
+        log.1.sql = "select job_id, status from db.sch.log where 1 = 0".into();
+        let mut inc = node("model.p.inc", "db.sch.inc", &["source.p.s.raw"], &[]);
+        inc.1.sql = "select a from db.s.raw where a > (select max(a) from db.sch.inc)".into();
+        let p = project_of(vec![src, log, inc]);
+        let warehouse = HashMap::from([
+            ("source.p.s.raw".to_string(), cols(&["a"])),
+            ("model.p.log".to_string(), cols(&["job_id", "status"])),
+            ("model.p.inc".to_string(), cols(&["a"])),
+        ]);
+        let r = run(&p, warehouse, &opts(true, false));
+        let t = &r.report.totals;
+        assert_eq!((t.columns_self, t.columns_lost), (2, 0));
+        assert_eq!((t.columns_covered_independent, t.columns_total_independent), (1, 1));
+        let listed: Vec<(&str, bool)> =
+            r.report.models.iter().map(|m| (m.unique_id.as_str(), m.reads_only_itself)).collect();
+        assert_eq!(listed, vec![("model.p.log", true)], "named, and the filtering one not");
     }
 
     #[test]

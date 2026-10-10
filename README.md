@@ -109,19 +109,20 @@ target with that target's environment, about 8 seconds end to end:
 | --- | --- |
 | Models parsed | 3507 / 3507 |
 | Edges | 132 955: 132 954 parsed, 1 inferred |
-| Columns covered | 97.0%, and 99.97% against a list this tool did not produce: 111 313 of 111 343 |
+| Columns covered | 97.0%, and 99.99% against a list this tool did not produce: 111 313 of 111 318 |
 | Columns emitted that the warehouse does not have | 0 |
 | Confirmed against the warehouse | 3496 of the 3499 models `catalog.json` covers |
 | Contradicted by it and settled column by column | 2 |
-| Output columns of trusted models with no edge, named | 11 |
+| Output columns of trusted models with no edge, named | 4 |
 | Columns read to choose rows | 7674, 2804 never projected, in the report unless `--indirect` |
 | Parsed edges an independent reading of the SQL shows wrong | 3 of 132 783, and 5 missing |
 
 Coverage is quoted twice on purpose. For a model with no `catalog.json` entry,
 8 of the 3507 here, the usual figure measures the compile against its own
 output. The second measures it against the warehouse where there is one and the
-YAML otherwise, minus the 3441 columns built from literals, which have no parent
-to find. The 30 columns left, and how the edges were checked, are in
+YAML otherwise, minus the columns with no parent to find: 3445 built from
+literals, and 21 of models reading only their own table (0039). The 5 columns
+left, and how the edges were checked, are in
 [`docs/next-steps.md`](docs/next-steps.md). Compiled for the same target without
 its environment file, against another environment's databases, the same
 project measured 94.8%: what a compile reads is the environment's.

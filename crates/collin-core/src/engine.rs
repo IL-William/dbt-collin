@@ -272,6 +272,9 @@ struct ScopeNames {
     ctes: Vec<String>,
     /// Lower case scope name, and the last part of each name its `*` reads.
     stars: Vec<(String, Vec<String>)>,
+    /// Lower case names of the derived tables whose rows are a `VALUES` list,
+    /// `(derived)` for one with no alias, as the engine labels it.
+    values: Vec<String>,
 }
 
 impl Visitor for ScopeNames {
@@ -289,10 +292,16 @@ impl Visitor for ScopeNames {
     }
 
     fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<()> {
-        if let TableFactor::Derived { alias: Some(alias), subquery, .. } = factor {
-            let name = alias.name.to_string();
-            self.stars.push((name.trim_matches('"').to_lowercase(), star_sources(subquery)));
-            self.derived.push(name);
+        if let TableFactor::Derived { alias, subquery, .. } = factor {
+            if matches!(subquery.body.as_ref(), SetExpr::Values(_)) {
+                let label = alias.as_ref().map(|a| a.name.to_string());
+                self.values.push(label.map_or("(derived)".into(), |l| l.trim_matches('"').to_lowercase()));
+            }
+            if let Some(alias) = alias {
+                let name = alias.name.to_string();
+                self.stars.push((name.trim_matches('"').to_lowercase(), star_sources(subquery)));
+                self.derived.push(name);
+            }
         }
         ControlFlow::Continue(())
     }
@@ -570,6 +579,8 @@ struct Scopes {
     /// `*` over a relation rather than over another CTE: their columns are
     /// whatever list that relation came with.
     star_over_relation: HashSet<String>,
+    /// Lower case names of the derived tables written as a `VALUES` list.
+    values: HashSet<String>,
     qualifies: Vec<Qualify>,
     joins: Vec<JoinKeys>,
     predicates: Vec<Predicate>,
@@ -598,6 +609,7 @@ fn scopes(sql: &str, dialect: Dialect) -> Scopes {
         out.predicates.extend(read.predicates);
         let ctes: HashSet<String> =
             names.ctes.iter().map(|c| c.trim_matches('"').to_lowercase()).collect();
+        out.values.extend(names.values.iter().cloned());
         for (scope, sources) in &names.stars {
             if sources.iter().any(|s| !ctes.contains(s)) {
                 out.star_over_relation.insert(scope.clone());
@@ -1001,6 +1013,7 @@ struct Graph<'r, 'm> {
     /// name ending in one names the table of a subquery, not a column.
     tables: &'m HashSet<String>,
     star_over_relation: &'m HashSet<String>,
+    values: &'m HashSet<String>,
 }
 
 impl<'r> Graph<'r, '_> {
@@ -1114,9 +1127,17 @@ impl<'r> Graph<'r, '_> {
                 below.absorb(literal);
             } else if let (None, Some((o, n))) = (own, via) {
                 let reads = self.relations_under(o);
-                let star = self.star_over_relation.contains(&n.label.trim_matches('"').to_lowercase());
-                let column = node.label.to_lowercase();
-                below.absorb(Ends::dead_end(DeadEnd::Phantom { via: n.label.to_lowercase(), column, reads, star }));
+                let label = n.label.trim_matches('"').to_lowercase();
+                if reads.is_empty() && self.values.contains(&label) {
+                    // A column of a `VALUES` list, `column1` and the rest: the
+                    // engine gives the list no columns, but its rows are written
+                    // in the SQL, so the walk ends at literals.
+                    below.absorb(literal);
+                } else {
+                    let star = self.star_over_relation.contains(&label);
+                    let column = node.label.to_lowercase();
+                    below.absorb(Ends::dead_end(DeadEnd::Phantom { via: n.label.to_lowercase(), column, reads, star }));
+                }
             } else if below.unreached {
                 // The guard above has already named what it reads.
                 below.other += 1;
@@ -1436,7 +1457,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         });
         return out;
     }
-    let Scopes { merged, star_over_relation, qualifies, joins, predicates } =
+    let Scopes { merged, star_over_relation, values, qualifies, joins, predicates } =
         scopes(sql, split_dialect(adapter));
     out.merged_scopes = merged;
 
@@ -1920,6 +1941,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         vocabulary: &vocabulary,
         tables: &tables,
         star_over_relation: &star_over_relation,
+        values: &values,
     };
     // Lost is measured against the engine's own edges. A column fed only by the
     // model's own relation counts as fed here although the pass drops that edge:
@@ -2628,6 +2650,26 @@ mod tests {
             seen_at_sources(&r),
             vec![("DB.S.INVOICES", "open_seen_at"), ("DB.S.PAYMENTS", "paid_seen_at")]
         );
+    }
+
+    #[test]
+    fn a_column_of_a_values_list_is_a_root() {
+        // The engine gives a `VALUES` list no columns, so `column1` reads as a
+        // name its derived table never had, where its rows are in the SQL.
+        for (sql, roots) in [
+            ("select column1 as a, column2 as b from values (1, 'x'), (2, 'y')", vec!["a", "b"]),
+            ("select column1 as a, column2 as b from (values (1, 'x'), (2, 'y'))", vec!["a", "b"]),
+            ("select v.column1 as a from (values (1), (2)) as v", vec!["a"]),
+            ("select a from (values (1), (2)) as v(a)", vec!["a"]),
+        ] {
+            let r = resolve(sql, "snowflake", &[]);
+            assert_eq!(r.roots, roots, "{sql}");
+            assert!(r.lost.is_empty(), "{sql}");
+        }
+        // A derived table that is not one, missing the name, is still a loss.
+        let r = resolve("select d.z as z from (select a from db.s.p) as d", "snowflake", &p_table());
+        assert!(r.roots.is_empty());
+        assert_eq!(r.lost.len(), 1);
     }
 
     fn p_table() -> Vec<Visible> {

@@ -204,6 +204,9 @@ fn main() -> ExitCode {
                 pct(t.columns_covered_independent, t.columns_total_independent)
             );
             println!("    roots, no parent to find {}", t.columns_root);
+            if t.columns_self > 0 {
+                println!("    read only from their own table, no parent {}", t.columns_self);
+            }
             if t.yaml_stale > 0 {
                 println!("\n  {} models whose YAML disagrees with the warehouse", t.yaml_stale);
             }

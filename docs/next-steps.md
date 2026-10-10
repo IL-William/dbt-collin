@@ -9,14 +9,13 @@ fork's `collin-engine-2`. Not a decision: a list to come back to.
 
 Every compile parses. Of 114 897 columns, 111 426 have an edge, 97.0%. Against
 the warehouse where a model has a table, 3499 of the 3507, and its YAML
-otherwise, columns built from constants aside, 111 313 of 111 343, 99.97%. The
+otherwise, columns with no parent to find aside, 111 313 of 111 318, 99.99%. The
 3471 without an edge, by cause:
 
 | Columns | Cause | Lever |
 | --- | --- | --- |
-| 3441 | Built from constants: literals, functions of literals, a date spine | None: they have no parent, and the report counts them as roots |
-| 21 | Three models that read only their own table: two audit tables written outside dbt, whose incremental compile is `select * from` itself `where 1 = 0` or close to it, and a date spine reading its last date | collin: a category of its own rather than a degraded compile and lost columns. The project: a table written outside dbt can be declared as a source |
-| 4 | Constants in a `VALUES` list, read as `column1` to `column4` | collin or the engine: a column of a `VALUES` list is a constant |
+| 3445 | Built from constants: literals, functions of literals, a date spine, a `VALUES` list (0016) | None: they have no parent, and the report counts them as roots |
+| 21 | Three models that read only their own table: two audit tables written outside dbt, whose incremental compile is `select * from` itself `where 1 = 0` or close to it, and a date spine reading its last date | None in dbt: the report counts them apart and names the models (0039). The project can declare a table written outside dbt as a source |
 | 4 | A `LATERAL FLATTEN`'s `KEY` and `INDEX`: 1 over a column's JSON, 3 over an array the SQL builds from literals and columns | The engine: the key of a column's JSON comes from that column, as `VALUE` does (0028); an index, and keys written in the SQL, are roots |
 | 1 | A view older than its code: it has a column neither the code nor its source has | Rebuild the view |
 
@@ -81,8 +80,8 @@ The disagreements sit in 10 models, and each was read in the SQL.
   count `c` as an input of the array its order shapes.
 
 Eight edges in 132 783, then, as far as the SQL shows. An independent reader
-backs the roots too: following each through its CTEs, 3424 of the 3441 end at
-no table. Of the other 17, 15 reach an incremental model's own table (0012),
+backs the roots too: following each through its CTEs, 3424 of the 3441 then
+counted end at no table. Of the other 17, 15 reach an incremental model's own table (0012),
 one is a literal the check misread, and one is the `FLATTEN` key above.
 
 ## On public projects
@@ -131,5 +130,3 @@ Since the engine's seventh patch (0028) they are read: 1303 parsed edges,
   engine. Over a column's JSON the key comes from that column: 2 edges missing
   here. Over an array the SQL builds, the index is a position and the keys are
   literals, which is a root, not the lost column it shows as: 3 columns here.
-- **A `VALUES` list** read as `column1` to `columnN` comes out lost, through a
-  derived table with no source, where its columns are constants: 4 here.

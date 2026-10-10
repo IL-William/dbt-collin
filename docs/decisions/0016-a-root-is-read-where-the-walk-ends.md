@@ -105,3 +105,15 @@ not find is never read as no name.
 On the same project: 37 more roots, every one defined by literals, 29 in trusted
 models; the lost columns of trusted models go from 458 to 429; `columns_root`
 from 1582 to 1602. The cache is identical.
+
+## Amended again, the same day
+
+A `VALUES` list is a derived table the engine gives no columns: `select
+column1 as a from values (1), (2)` reads a name the list never had, so the walk
+ended at a phantom and the column was lost. Its rows are written in the SQL. A
+walk that ends at a derived table whose body is a `VALUES` list, read off the
+syntax tree, and that reads no relation now ends at literals, so the column is
+a root. A derived table that is not one, missing the name, is still a loss.
+
+On a 3507 model Snowflake project 4 columns of one model, a list of claims to
+exclude, go from lost to roots; the cache is identical.

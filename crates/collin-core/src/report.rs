@@ -154,6 +154,13 @@ pub struct Totals {
     /// the independent denominator above, because a root cannot be covered, and
     /// published here so the raw count is still recoverable.
     pub columns_root: usize,
+    /// Columns of models that read no relation but their own: rows the model
+    /// carries over, a table something outside dbt writes, and the literals
+    /// beside them. No parent in dbt to find either, so held out of the
+    /// independent denominator as the roots are (0039). See
+    /// `ModelReport::reads_only_itself`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub columns_self: usize,
     /// YAML disagrees with the warehouse. A documentation finding, not a
     /// lineage one, reported because nothing else in the project looks.
     pub yaml_stale: usize,
@@ -226,6 +233,12 @@ pub struct ModelReport {
     /// compile is set aside, and the edges are inferred.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub sql_file_set_aside: bool,
+    /// The SQL reads no relation but the model's own: an incremental model
+    /// that only adds to itself, or a table something outside dbt writes and
+    /// dbt only creates. Its columns have no parent in dbt, and none is listed
+    /// as lost (0039). Declaring such a table as a source says so to dbt too.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reads_only_itself: bool,
     /// parsed, per_column, inferred or unresolved.
     pub provenance: &'static str,
     pub agreement: &'static str,
@@ -277,8 +290,8 @@ pub struct ModelReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub lost_columns: Vec<LostColumn>,
     /// Names the SQL gives to two derived tables, or two CTEs, of one
-    /// statement. The engine reads the two as one, so the compile is not
-    /// trusted: rename one of them and the model reads as it is written.
+    /// statement. The engine reads them apart since the fork's seventh patch,
+    /// so this is a fact about the SQL, not a fault (0018).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub merged_scopes: Vec<MergedScopeReport>,
     /// Names the SQL reads from a CTE whose select list does not have them, so
@@ -478,6 +491,7 @@ mod tests {
             file: String::new(),
             sql_file: None,
             sql_file_set_aside: false,
+            reads_only_itself: false,
             provenance: "parsed",
             agreement: "unchecked",
             parse_error: None,
