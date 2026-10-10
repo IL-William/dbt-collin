@@ -9,11 +9,12 @@ cache. It reads a project, it never runs dbt and never reaches a warehouse.
 cargo test
 ```
 
-It reads dbt's Jaffle Shop end to end, from the manifest and catalog dbt wrote,
-against the caches committed beside it (0038). A change that moves an edge
-fails it. One meant to is accepted with `COLLIN_BLESS=1 cargo test --release
-jaffle_shop`, and the diff of `expected/` goes into the pull request. It is five
-plain models, so it does not replace what follows.
+It reads two public projects end to end, dbt's Jaffle Shop and Fivetran's
+Shopify package, from the manifest and catalog dbt wrote, against the caches
+committed beside them (0038). A change that moves an edge fails it. One meant to
+is accepted with `COLLIN_BLESS=1 cargo test --release committed_beside`, and
+the diff of `expected/` goes into the pull request. Neither is Snowflake, so
+they do not replace what follows.
 
 Then, against a real project outside this tree:
 

@@ -1,5 +1,5 @@
-# dbt Labs' example project, copied for a test (0038): kept out of the language
+# Public dbt projects, copied for a test (0038): kept out of the language
 # statistics, and dbt's own output folded in a diff. The expected caches are
 # not folded: their diff is what a change to an edge shows.
-crates/collin-core/fixtures/jaffle_shop/** linguist-vendored
-crates/collin-core/fixtures/jaffle_shop/target/*.json linguist-generated
+crates/collin-core/fixtures/** linguist-vendored
+crates/collin-core/fixtures/*/target/*.json linguist-generated

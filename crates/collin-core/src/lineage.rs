@@ -3121,15 +3121,14 @@ mod tests {
         );
     }
 
-    /// dbt's own example project, read from the manifest and the catalog dbt
-    /// wrote for it, where every other test hands the pass what a test wrote
-    /// (0038). The caches it gave are committed beside it, so an edge that
-    /// moves fails here. One meant to move is accepted with `COLLIN_BLESS=1`,
-    /// and the diff of `expected/` is what the pull request then shows.
-    #[test]
-    fn jaffle_shop_gives_the_caches_committed_beside_it() {
-        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/jaffle_shop");
-        let target = Target::new("jaffle-shop");
+    /// A public project, read from the manifest and the catalog dbt wrote for
+    /// it, where every other test hands the pass what a test wrote (0038). The
+    /// caches it gave are committed beside it, so an edge that moves fails here.
+    /// One meant to move is accepted with `COLLIN_BLESS=1`, and the diff of
+    /// `expected/` is what the pull request then shows.
+    fn gives_the_caches_committed_beside_it(fixture: &str) {
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(fixture);
+        let target = Target::new(fixture);
         for (indirect, name) in [(false, "cache.json"), (true, "cache.indirect.json")] {
             let mut o = Options::new(project.clone());
             o.indirect = indirect;
@@ -3147,24 +3146,52 @@ mod tests {
 
             let expected = project.join("expected").join(name);
             if std::env::var_os("COLLIN_BLESS").is_some() {
-                std::fs::write(&expected, serde_json::to_string_pretty(&got).unwrap() + "\n").unwrap();
+                std::fs::write(&expected, one_edge_a_line(&got)).unwrap();
                 continue;
             }
             let want = read(&expected);
-            let edges = |v: &serde_json::Value| -> Vec<String> {
+            if got == want {
+                continue;
+            }
+            let edges = |v: &serde_json::Value| -> HashSet<String> {
                 v["edges"].as_array().unwrap().iter().map(|e| e.to_string()).collect()
             };
             let (w, g) = (edges(&want), edges(&got));
-            let only = |a: &[String], b: &[String]| -> String {
-                a.iter().filter(|e| !b.contains(e)).map(|e| format!("\n  {e}")).collect()
+            let only = |a: &HashSet<String>, b: &HashSet<String>| -> String {
+                let mut v: Vec<&String> = a.difference(b).collect();
+                v.sort();
+                let shown: String = v.iter().take(40).map(|e| format!("\n  {e}")).collect();
+                format!(" {}{shown}", v.len())
             };
-            assert!(
-                got == want,
-                "{name} moved\ngone:{}\nnew:{}\n(both empty: the order or a field moved)\n\
-                 Read why, then accept it with COLLIN_BLESS=1 cargo test --release jaffle_shop",
+            panic!(
+                "{fixture}/expected/{name} moved\ngone:{}\nnew:{}\n(both 0: the order or a field moved)\n\
+                 Read why, then accept it with COLLIN_BLESS=1 cargo test --release committed_beside",
                 only(&w, &g),
                 only(&g, &w),
             );
         }
+    }
+
+    /// The cache with one edge a line, so that the diff of an expected cache
+    /// shows each edge that moved and nothing else.
+    fn one_edge_a_line(cache: &serde_json::Value) -> String {
+        let mut head = cache.clone();
+        let edges = head.as_object_mut().unwrap().remove("edges").unwrap();
+        let head = head.to_string();
+        let lines: Vec<String> = edges.as_array().unwrap().iter().map(|e| e.to_string()).collect();
+        format!("{},\"edges\":[\n{}\n]}}\n", &head[..head.len() - 1], lines.join(",\n"))
+    }
+
+    #[test]
+    fn jaffle_shop_gives_the_caches_committed_beside_it() {
+        gives_the_caches_committed_beside_it("jaffle_shop");
+    }
+
+    /// Fivetran's Shopify package: SQL written for production, ephemeral models
+    /// inlined as CTEs, and staging models whose columns the package fills from
+    /// what each source turns out to have.
+    #[test]
+    fn shopify_gives_the_caches_committed_beside_it() {
+        gives_the_caches_committed_beside_it("shopify");
     }
 }

@@ -1,0 +1,11 @@
+# DuckDB in process. The schema is the one the package's sources read its seeds
+# from: under any other, its introspection finds no table and writes a
+# placeholder select for every staging model.
+integration_tests:
+  target: duckdb
+  outputs:
+    duckdb:
+      type: duckdb
+      path: shopify.duckdb
+      schema: shopify_integration_tests
+      threads: 8
