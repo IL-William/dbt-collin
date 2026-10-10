@@ -12,6 +12,7 @@
 pub mod cache;
 pub mod catalog;
 pub mod engine;
+pub mod findings;
 pub mod lineage;
 pub mod manifest;
 pub mod report;

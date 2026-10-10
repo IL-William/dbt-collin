@@ -236,6 +236,14 @@ fn main() -> ExitCode {
                     t.columns_lost
                 );
             }
+            if !o.findings.is_empty() {
+                // The report says what each finding means and what to do; here
+                // only that there is something, and how much.
+                println!("\n  findings, in the report");
+                for f in &o.findings {
+                    println!("    {:<8} {:<8} {}", f.owner, f.severity, f.title);
+                }
+            }
             println!("\n  cache   {}", o.out.display());
             println!("  report  {}", o.report.display());
             if t.without_compiled_code > 0 {

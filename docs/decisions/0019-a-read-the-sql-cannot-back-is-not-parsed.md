@@ -93,3 +93,11 @@ from 42 models to 22, the other 20 being these stages. 15 models leave the fault
 list, their `UNKNOWN_COLUMN` having come from reading a stage's short list, now
 replaced by its YAML; 3 enter it for their unbacked reads. The lost columns of
 trusted models go from 428 to 354. The cache stays at version 1.
+
+## Amended the same day
+
+A `VALUES` list's columns and a `LATERAL FLATTEN`'s six are not such reads,
+though the engine gives the first no columns and the position columns of the
+second nothing to feed them: the SQL backs both. On a 3507 model Snowflake
+project, compiled on its own environment, unbacked reads go from 6 to none and
+the cache does not move.

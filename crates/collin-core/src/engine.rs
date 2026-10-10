@@ -1186,7 +1186,12 @@ struct Unbacked<'r, 'm> {
     feeds: &'m Feeds<'r>,
     known: &'m HashMap<String, HashSet<String>>,
     star_over_relation: &'m HashSet<String>,
+    values: &'m HashSet<String>,
+    flattens: &'m HashSet<String>,
 }
+
+/// The columns Snowflake documents for a `LATERAL FLATTEN`, lower case.
+const FLATTEN_COLUMNS: [&str; 6] = ["seq", "key", "path", "index", "value", "this"];
 
 impl<'r> Unbacked<'r, '_> {
     /// A column the engine made for a CTE because a scope read it, with
@@ -1243,7 +1248,15 @@ impl<'r> Unbacked<'r, '_> {
         };
         let Some(cte_node) = self.by_id.get(cte) else { return Vec::new() };
         let label = cte_node.label.to_lowercase();
-        if names.is_empty() || self.star_over_relation.contains(label.trim_matches('"')) {
+        let bare = label.trim_matches('"');
+        // A `VALUES` list's columns are its rows', and a FLATTEN has the six it
+        // documents: the engine gives the one none and the other's position
+        // columns nothing to feed them, which is no read the SQL cannot back.
+        let mut names = names;
+        if self.flattens.contains(bare) {
+            names.retain(|n| !FLATTEN_COLUMNS.contains(&n.as_str()));
+        }
+        if names.is_empty() || self.star_over_relation.contains(bare) || self.values.contains(bare) {
             return Vec::new();
         }
         let under = relations_under(self.by_id, self.feeds, cte);
@@ -1684,6 +1697,8 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                         feeds: &feeds,
                         known: &known,
                         star_over_relation: &star_over_relation,
+                        values: &values,
+                        flattens: &flattens,
                     }
                     .reads(from, *is_derived, *edge_expr);
                     for (cte, column, owners) in found {
@@ -2728,6 +2743,20 @@ mod tests {
         assert_eq!(edges, vec![("data", "element_name"), ("data", "element_value")]);
         assert_eq!(r.roots, vec!["position"]);
         assert!(r.lost.is_empty());
+    }
+
+    #[test]
+    fn a_values_column_and_a_flatten_index_are_not_unbacked() {
+        // The engine gives a `VALUES` list no columns and a FLATTEN's index
+        // nothing to feed it: neither is a name the SQL reads and cannot back.
+        let tables = [vis("DB.S.P", &["id", "arr"])];
+        for sql in [
+            "select column1 as a, column2 as b from values (1, 'x'), (2, 'y')",
+            "select p.id, fl.index + 1 as option_id from db.s.p as p, lateral flatten(input => p.arr) as fl",
+        ] {
+            let r = resolve(sql, "snowflake", &tables);
+            assert!(r.unbacked.is_empty(), "{sql}: {:?}", unbacked_of(&r));
+        }
     }
 
     fn p_table() -> Vec<Visible> {

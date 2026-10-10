@@ -103,6 +103,7 @@ invariant.
 | `role.rs` | an expression to a role |
 | `lineage.rs` | the pass, and the provenance ladder |
 | `report.rs` | coverage and gaps |
+| `findings.rs` | the report's models grouped by cause, worded for whoever can act |
 | `cache.rs` | the `column_lineage.json` writer |
 
 Tests live beside the code in `#[cfg(test)]` modules, the way dbt-lens does it.
