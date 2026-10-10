@@ -77,12 +77,41 @@ Six edges in 115 286, then, as far as the SQL shows. The three wrong ones sit
 beside a right edge into the same column. Of the two `FLATTEN` columns, one is
 among the 83 lost above and one among the roots.
 
+## On public projects
+
+The project above is Snowflake and has its own shapes. Two public ones show
+others.
+
+**Cal-ITP**, the dbt artifacts Caltrans publishes for its transit warehouse:
+624 BigQuery models, manifest and catalog from one run, pinned outside the tree.
+dbt quotes a BigQuery relation in backticks, which `norm_relation` kept, so no
+relation matched and 19 594 of 20 386 edges left the graph through `rel:`.
+With that fixed, 92.5% of columns have an edge and 93.4% against the warehouse.
+The 1162 without one that are not roots, by first cause:
+
+| Columns | Cause | Where it would be fixed |
+| --- | --- | --- |
+| 470 | A field of a STRUCT, `metadata.extract_ts`, read as a column of a table named `metadata` | The engine |
+| 395 | The fields of a STRUCT, which the catalog lists as columns, `device.fo_device_type`: no select can write one. They also mark 22 of the 38 degraded compiles | collin: a field is not a column |
+| 121 | A column of an `UNNEST` alias or of a `PIVOT`'s output, in 57 and 8 models | The engine |
+| 56 | 29 models set aside for two CTEs of one name (0018): a macro wraps each source in its own `WITH ranked` | The engine |
+| 120 | Not read yet: 51 settled column by column, 42 inferred where no parent has the name, 23 in one audit log model, 4 in a compile that does not parse | |
+
+**Fivetran's Shopify package**, a fixture (0038): 240 models, 4875 edges, 89.6%
+of columns covered. sqlglot reads 4244 of its 4245 parsed edges the same way.
+16 marts are set aside, their 630 edges inferred: ephemeral models are inlined
+as CTEs, each with its own `WITH`, and two of them name a CTE alike (0018).
+
 ## Residuals already named
 
 - **Two CTEs of one name in nested `WITH` blocks** still merge in the engine
-  (0018). Here one model has them, a date spine reading no table: fixing the
-  engine would turn its two lost columns into roots, and add no edge. Not worth
-  a patch until a model with a parent has them.
+  (0018). On the project above one model has them, a date spine reading no
+  table, and fixing the engine adds no edge there. On the public projects it is
+  the largest fix the engine owes: 16 of Shopify's marts, 630 edges inferred
+  that the SQL would give, and 29 of Cal-ITP's models.
+- **A column read beside an alias of the same name** is credited to the alias:
+  in `country_code as country, country as country_name`, the SQL reads the
+  table's `country`. One edge in Shopify.
 - **An inferred column several parents could give** is settled by the compile,
   by every candidate, or by manifest order (0027): 35 by every candidate and 58
   by order here.
