@@ -102,24 +102,28 @@ nothing else in a dbt project looks.
 
 ## Measured
 
-On a 3341 model Snowflake project, about 5 seconds end to end:
+On a 3507 model Snowflake project, its manifest and catalog generated on one
+target, about 5 seconds end to end:
 
 | | |
 | --- | --- |
-| Models parsed | 3320 / 3341, and every failure is invalid SQL rather than a parser gap |
-| Edges | 103 575: 97 812 parsed, 5763 inferred |
-| Columns covered | 94.1%, and 95.8% against a list this tool did not produce |
+| Models parsed | 3448 / 3507, and every failure is invalid SQL rather than a parser gap |
+| Edges | 119 573: 117 926 parsed, 1647 inferred |
+| Columns covered | 94.8%, and 97.6% against a list this tool did not produce |
 | Columns emitted that the warehouse does not have | 0 |
-| Confirmed against the warehouse | 486 of the 604 models `catalog.json` covers |
-| Contradicted by it and settled column by column | 62 |
-| Output columns of trusted models with no edge, named | 103 |
-| Columns read to choose rows | 6305, 2337 never projected, in the report unless `--indirect` |
+| Confirmed against the warehouse | 3154 of the 3316 models `catalog.json` covers |
+| Contradicted by it and settled column by column | 158 |
+| Output columns of trusted models with no edge, named | 117 |
+| Columns read to choose rows | 6847, 2503 never projected, in the report unless `--indirect` |
+| Parsed edges an independent reading of the SQL shows wrong | 3 of 115 283 |
 
-Coverage is quoted twice on purpose. 2737 of the 3341 models have no
-`catalog.json` entry, so the usual figure measures the compile against its own
+Coverage is quoted twice on purpose. For a model with no `catalog.json` entry,
+191 of the 3507 here, the usual figure measures the compile against its own
 output. The second measures it against the warehouse where there is one and the
 YAML otherwise, minus the columns built from literals, which have no parent to
-find.
+find. What keeps either from 100%, and how the edges were checked, is in
+[`docs/next-steps.md`](docs/next-steps.md): nearly all of it is fixed in the
+project's tables and macros, not here.
 
 ## Design
 
