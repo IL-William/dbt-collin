@@ -92,7 +92,11 @@ reason to doubt it, or shares no column with its table, drops to `inferred`.
 Otherwise it is settled column by column
 ([0029](docs/decisions/0029-a-compile-its-table-is-behind-keeps-the-columns-both-have.md)):
 the columns both have keep their parsed edges, the table's others are inferred,
-and those only the compile has are withheld. The warehouse disagreeing with the
+and those only the compile has are withheld. A catalog entry describing another
+table than the manifest names, one generated with another target, witnesses
+nothing: it is set aside and named in the report
+([0037](docs/decisions/0037-a-catalog-entry-for-another-table-is-no-witness.md)).
+The warehouse disagreeing with the
 YAML means the documentation is stale, which the report says out loud because
 nothing else in a dbt project looks.
 

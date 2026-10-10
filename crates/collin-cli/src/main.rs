@@ -175,6 +175,12 @@ fn main() -> ExitCode {
             );
             println!("    degraded compile        {} ({} kept per column)", t.degraded, t.per_column);
             println!("    unchecked, no catalog   {}", t.unchecked);
+            if t.catalog_elsewhere > 0 {
+                println!(
+                    "    catalog of other tables {}, not used: regenerate it with the manifest's target",
+                    t.catalog_elsewhere
+                );
+            }
             println!();
             println!("  {} edges", t.edges_parsed + t.edges_inferred + t.edges_indirect);
             println!("    parsed                  {}", t.edges_parsed);
