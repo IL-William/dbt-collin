@@ -155,8 +155,7 @@ pub struct Resolved {
     /// SQL has and the engine lost, each with where the walk back stopped.
     /// Sorted by column.
     pub lost: Vec<Lost>,
-    /// Names the statement gives to more than one scope, which the engine then
-    /// reads as one. See `merged_scopes`.
+    /// Names the statement gives to more than one scope. See `MergedScope`.
     pub merged_scopes: Vec<MergedScope>,
     /// Names read from a CTE that does not project them. See `UnbackedRead`.
     pub unbacked: Vec<UnbackedRead>,
@@ -222,11 +221,13 @@ pub struct UnbackedRead {
 
 /// A name one statement gives to two derived tables, or to two CTEs.
 ///
-/// The engine keys a derived table and a CTE by its name within a statement,
-/// and keeps the first node with a key: the second scope's columns become the
-/// first's, and an output of either can come out fed by both, with nothing said.
-/// A fact about the SQL that predicts a known failure of the engine, reported
-/// rather than acted on here.
+/// Released flowscope-core keys a derived table and a CTE by its name within a
+/// statement, and keeps the first node with a key: the second scope's columns
+/// become the first's, and an output of either can come out fed by both, with
+/// nothing said. The fork keys both by occurrence (0028), so this is a fact
+/// about the SQL, named in the report, and no longer a failure to act on
+/// (0018). The tests reading two of each apart are what would catch a pin that
+/// lost it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergedScope {
     /// `derived` or `cte`.
@@ -2609,6 +2610,24 @@ mod tests {
             &span_tables(),
         );
         assert_eq!(r.merged_scopes, vec![MergedScope { kind: "cte", name: "z".into(), count: 2 }]);
+    }
+
+    #[test]
+    fn two_ctes_of_one_name_in_nested_withs_are_read_apart() {
+        // Since the fork's seventh patch the engine keys a CTE by its occurrence
+        // and scopes it to its `WITH` (0028), so the plan need not set such a
+        // compile aside (0018). Should a pin undo that, this fails first.
+        let r = resolve(
+            "select p.seen_at as paid_seen_at, q.seen_at as open_seen_at \
+             from (with z as (select seen_at from db.s.payments) select seen_at from z) as p \
+             cross join (with z as (select seen_at from db.s.invoices) select seen_at from z) as q",
+            "snowflake",
+            &span_tables(),
+        );
+        assert_eq!(
+            seen_at_sources(&r),
+            vec![("DB.S.INVOICES", "open_seen_at"), ("DB.S.PAYMENTS", "paid_seen_at")]
+        );
     }
 
     fn p_table() -> Vec<Visible> {

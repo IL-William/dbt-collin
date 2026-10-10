@@ -45,6 +45,9 @@ The patches, in the order they are pinned:
    nothing to the outputs; a derived table without an alias gets a node as one
    with an alias does.
 6. A wildcard's EXCLUDE, EXCEPT and RENAME are read when it is expanded.
+7. A CTE reusing the name of another in the same statement gets a node of its
+   own, its name scoped to its `WITH`, and a `SELECT *` with no schema infers
+   its columns per node rather than per name.
 
 When upstream releases a patch, the fork rebases onto that release and drops
 it. When it has released them all, the pin goes back to a crates.io version and
@@ -102,3 +105,13 @@ rewrite of a branch can take it away. Of upstream's changes since 0.9.0 only
 the MSSQL `GO` batch splitter touches the engine: the cache, `--indirect` too,
 and the report of the same project are byte for byte what they were. Branch
 `collin` stays.
+
+Moved to the seventh, on `master` and tagged `collin-engine-2`, two CTEs of one
+name in nested `WITH` blocks no longer merge, and 0018 stops setting their
+compiles aside. On the 3507 model Snowflake project the cache, `--indirect`
+too, is what it was. On Fivetran's Shopify package the 630 inferred edges of
+the 23 compiles it set aside become 1303 parsed ones, and on Cal-ITP's 624
+BigQuery models 500 inferred become 579 parsed. Before the plan changed, the
+patch alone already moved 16 inferred Shopify edges: 0027 settles a name
+several parents have by the compile's reading, and that reading no longer
+crossed the two scopes.

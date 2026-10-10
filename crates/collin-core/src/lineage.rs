@@ -833,15 +833,10 @@ impl Plan {
 /// `foreign` whether its SQL is a compiled file compiled against another graph
 /// than the manifest's.
 fn plan(resolved: &engine::Resolved, agreement: Agreement, parents_known: bool, shared: bool, foreign: bool) -> Plan {
-    // Nor may the edges of a statement the engine read two scopes of as one go
-    // out: they cross the two, and nothing in them says which (0018). Two CTEs
-    // of one name in nested `WITH` blocks still merge; two derived tables of
-    // one name no longer do since the fork keys them by occurrence (0028), and
-    // are only named.
-    let sound = resolved.parse_error.is_none()
-        && !silent(resolved, parents_known)
-        && !resolved.merged_scopes.iter().any(|m| m.kind == "cte")
-        && !foreign;
+    // Two scopes of one name, derived tables or CTEs in nested `WITH` blocks,
+    // are only named: the fork keys both by occurrence (0028), so the engine no
+    // longer reads them as one and their edges do not cross (0018).
+    let sound = resolved.parse_error.is_none() && !silent(resolved, parents_known) && !foreign;
     match agreement {
         _ if !sound => Plan::Inferred,
         // A degraded compile has been shown not to describe the object that
@@ -1863,13 +1858,13 @@ mod tests {
         assert_eq!(plan(&failed, Agreement::Unchecked, false, false, false), Plan::Inferred);
         // A compiled file read against another graph, whatever else it agrees on.
         assert_eq!(plan(&spoke, Agreement::Confirmed, true, true, true), Plan::Inferred);
-        // Its own reasons still set a contradicted compile aside whole.
+        // Two CTEs of one name are named, and no longer set a compile aside.
         let merged = engine::Resolved {
             edges: vec![raw("DB.SCH.PARENT", "a")],
             merged_scopes: vec![engine::MergedScope { kind: "cte", name: "t".into(), count: 2 }],
             ..Default::default()
         };
-        assert_eq!(plan(&merged, Agreement::Degraded, true, true, false), Plan::Inferred);
+        assert_eq!(plan(&merged, Agreement::Degraded, true, true, false), Plan::PerColumn);
     }
 
     #[test]
@@ -2060,7 +2055,7 @@ mod tests {
     }
 
     #[test]
-    fn two_ctes_of_one_name_set_a_compile_aside_and_two_derived_tables_do_not() {
+    fn two_scopes_of_one_name_are_named_and_read_apart() {
         let source = |uid: &str, rel: &str, c: &[&str]| {
             let mut s = node(uid, rel, &[], &[]);
             s.1.kind = "source".into();
@@ -2093,12 +2088,13 @@ mod tests {
         let into = |to: &str, col: &str| -> Vec<&str> {
             r.edges.iter().filter(|e| e.to == to && e.to_col == col).map(|e| e.from.as_str()).collect()
         };
-        // The engine still reads two CTEs of one name as one, so that compile
-        // is set aside, and with no inference in this run publishes nothing.
-        assert!(r.edges.iter().all(|e| e.to != "model.p.nested"), "{:?}", shape(&r.edges));
-        let nested = r.report.models.iter().find(|m| m.unique_id == "model.p.nested").expect("listed");
-        assert_eq!(nested.merged_scopes, vec![MergedScopeReport { kind: "cte", name: "z".into(), count: 2 }]);
-        // Two derived tables of one name it keys apart, so that one is read.
+        // The fork keys two CTEs of one name apart (0028), so that compile is
+        // read, each output from its own relation. Read right, it has nothing
+        // to report: it is counted, not listed.
+        assert_eq!(into("model.p.nested", "paid_seen_at"), vec!["source.p.s.payments"]);
+        assert_eq!(into("model.p.nested", "open_seen_at"), vec!["source.p.s.invoices"]);
+        assert!(r.report.models.iter().all(|m| m.unique_id != "model.p.nested"));
+        // So are two derived tables of one name.
         assert_eq!(into("model.p.derived", "paid_seen_at"), vec!["source.p.s.payments"]);
         assert_eq!(into("model.p.derived", "open_seen_at"), vec!["source.p.s.invoices"]);
         assert_eq!(r.report.totals.scope_merged, 2, "both named");
