@@ -44,6 +44,7 @@ is built this way, for whoever changes it next.
 | [0036](0036-free-to-use-not-to-resell.md) | Free to use, not to resell | changing the license or the copyright line, or linking code under another license |
 | [0037](0037-a-catalog-entry-for-another-table-is-no-witness.md) | A catalog entry for another table is no witness | changing how `catalog.json` is matched to the manifest, or trusting an entry because its unique_id is right |
 | [0038](0038-a-public-example-project-is-a-fixture.md) | A public example project is a fixture | adding a fixture collin did not invent, or accepting a change to the expected caches of one |
+| [0039](0039-a-model-reading-only-itself-has-no-parent-to-find.md) | A model reading only itself has no parent to find | changing what counts as a lost column, what the independent coverage leaves out, or how a model reading its own relation is reported |
 
 ## The other side of the boundary
 
