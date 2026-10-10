@@ -1536,6 +1536,24 @@ mod tests {
     }
 
     #[test]
+    fn a_relation_in_backticks_is_read_from_its_dbt_node() {
+        // dbt-bigquery quotes relation_name in backticks. Read as a name of its
+        // own, every parent was a relation dbt was not told of, and every edge
+        // left the graph through `rel:`.
+        let mut p = project_of(vec![
+            node("model.p.child", "`my-proj`.`ds`.`child`", &["model.p.parent"], &[]),
+            node("model.p.parent", "`my-proj`.`ds`.`parent`", &[], &["a", "b"]),
+        ]);
+        p.adapter = "bigquery".into();
+        p.nodes.get_mut("model.p.child").unwrap().sql = "select a, b as c from `my-proj`.`ds`.`parent`".into();
+        let r = run(&p, HashMap::new(), &opts(true, false));
+        let edges: Vec<_> = r.edges.iter().map(|e| (e.from.as_str(), e.from_col.as_str(), e.to_col.as_str())).collect();
+        assert_eq!(edges, vec![("model.p.parent", "a", "a"), ("model.p.parent", "b", "c")]);
+        assert_eq!(r.report.totals.undeclared, 0);
+        assert!(r.report.models.iter().all(|m| m.unknown_relations.is_empty()));
+    }
+
+    #[test]
     fn an_unknown_relation_keeps_the_rel_escape_hatch() {
         let p = project();
         assert_eq!(node_for(&p, &HashMap::new(), "DB.SCH.OUTSIDE"), "rel:db.sch.outside");

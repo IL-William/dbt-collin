@@ -179,11 +179,22 @@ pub struct Project {
     pub adapter: String,
 }
 
-/// Uppercase and strip quotes, so a name from dbt and a name from the SQL
-/// engine compare equal.
+/// What dbt quotes a relation's parts with when it writes `relation_name`: the
+/// adapter's `Relation.quote_character`, `"` by default and a backtick on
+/// BigQuery, Databricks, Spark and ClickHouse. Not `adapter.quote`, which is
+/// for macros and differs on Fabric.
+///
+/// Both are stripped whatever the adapter. A project has one, and its SQL
+/// cannot quote a name with the other, so the only name this could misread
+/// begins or ends with the other character. Carrying the adapter to every
+/// place a name is compared would buy nothing more.
+const QUOTES: [char; 2] = ['"', '`'];
+
+/// Uppercase and strip quotes, so a name from dbt, one from the catalog and one
+/// from the SQL engine compare equal.
 pub fn norm_relation(rel: &str) -> String {
     rel.split('.')
-        .map(|p| p.trim().trim_matches('"').to_uppercase())
+        .map(|p| p.trim().trim_matches(&QUOTES[..]).to_uppercase())
         .collect::<Vec<_>>()
         .join(".")
 }
@@ -316,6 +327,14 @@ mod tests {
         assert_eq!(norm_relation("db.sch.tbl"), "DB.SCH.TBL");
         assert_eq!(norm_relation("\"DB\".\"sch\".\"Tbl\""), "DB.SCH.TBL");
         assert_eq!(norm_relation("sch.tbl"), "SCH.TBL");
+    }
+
+    #[test]
+    fn a_relation_dbt_quotes_in_backticks_is_the_same_relation() {
+        // As dbt-bigquery writes relation_name, and as the SQL may spell it.
+        assert_eq!(norm_relation("`my-proj`.`ds`.`Tbl`"), "MY-PROJ.DS.TBL");
+        assert_eq!(norm_relation("`my-proj.ds.tbl`"), "MY-PROJ.DS.TBL");
+        assert_eq!(norm_relation("my-proj.ds.tbl"), "MY-PROJ.DS.TBL");
     }
 
     fn node(uid: &str, parents: &[&str]) -> (String, Node) {
