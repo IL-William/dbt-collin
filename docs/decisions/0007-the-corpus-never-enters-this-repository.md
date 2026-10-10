@@ -42,3 +42,10 @@ The hard shapes, nested stars, UNION, windows, ephemeral models, self joins,
 have to be written by hand as invented SQL. That is slower, and it has an upside:
 an invented fixture states the behaviour it is testing, which a captured one
 never does.
+
+## Amended the same day
+
+"Every fixture is invented" also kept out what carries no client data. A public
+example project under a license that allows copying it is a fixture too
+([0038](0038-a-public-example-project-is-a-fixture.md)), so that one test reads
+what dbt wrote rather than what a test wrote. The corpus stays out.

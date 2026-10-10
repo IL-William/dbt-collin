@@ -9,6 +9,12 @@ cache. It reads a project, it never runs dbt and never reaches a warehouse.
 cargo test
 ```
 
+It reads dbt's Jaffle Shop end to end, from the manifest and catalog dbt wrote,
+against the caches committed beside it (0038). A change that moves an edge
+fails it. One meant to is accepted with `COLLIN_BLESS=1 cargo test --release
+jaffle_shop`, and the diff of `expected/` goes into the pull request. It is five
+plain models, so it does not replace what follows.
+
 Then, against a real project outside this tree:
 
 ```
@@ -64,7 +70,8 @@ diff -r /tmp/collin/before/dump $O/dump                     # what the engine sa
   `lineage.rs`, which has to label the choice.
 - **The cache stays at version 1.** dbt-lens refuses anything higher, so a
   released binary must keep reading what this writes.
-- **No real project SQL in this repository.** Fixtures are invented.
+- **No real project SQL in this repository.** Fixtures are invented, or public
+  under a license that allows copying them here (0038).
 - **Comments say why, not what.**
 - **No em dash** in code, comments or documentation.
 

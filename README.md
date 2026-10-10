@@ -208,7 +208,9 @@ lists propagate from the leaves instead of needing a warehouse.
   ([0032](docs/decisions/0032-the-loudest-role-over-every-path-stands.md)).
 - **`* REPLACE (...)` and `* ILIKE '...'`** are not read: the star expands to
   every column, as it would without them. `EXCLUDE`, `EXCEPT` and `RENAME` are.
-- **The corpus never enters this repository.** Fixtures are invented; point
+- **The corpus never enters this repository.** Fixtures are invented, apart
+  from dbt's public Jaffle Shop
+  ([0038](docs/decisions/0038-a-public-example-project-is-a-fixture.md)); point
   `--project` at a checkout outside the tree.
 
 ## Verify
@@ -217,6 +219,10 @@ lists propagate from the leaves instead of needing a warehouse.
 cargo test
 cargo run --release -p collin-cli -- generate --project /path/to/dbt-project
 ```
+
+`cargo test` runs collin on dbt's Jaffle Shop, from the manifest and catalog
+dbt wrote for it, and fails if an edge differs from the caches committed beside
+it.
 
 The same project twice must give the same file apart from its `generated_at`.
 Two dbt nodes claiming one warehouse object used to be settled by hash order,

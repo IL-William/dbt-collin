@@ -3120,4 +3120,51 @@ mod tests {
             }])
         );
     }
+
+    /// dbt's own example project, read from the manifest and the catalog dbt
+    /// wrote for it, where every other test hands the pass what a test wrote
+    /// (0038). The caches it gave are committed beside it, so an edge that
+    /// moves fails here. One meant to move is accepted with `COLLIN_BLESS=1`,
+    /// and the diff of `expected/` is what the pull request then shows.
+    #[test]
+    fn jaffle_shop_gives_the_caches_committed_beside_it() {
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/jaffle_shop");
+        let target = Target::new("jaffle-shop");
+        for (indirect, name) in [(false, "cache.json"), (true, "cache.indirect.json")] {
+            let mut o = Options::new(project.clone());
+            o.indirect = indirect;
+            o.out = target.0.join(name);
+            o.report = target.0.join("report.json");
+            generate(&o).unwrap();
+            let read = |p: &Path| -> serde_json::Value {
+                serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+            };
+            let mut got = read(&o.out);
+            // What two runs of the same code differ in, as AGENTS.md hashes it.
+            let fields = got.as_object_mut().unwrap();
+            fields.remove("generated_at");
+            fields.remove("producer");
+
+            let expected = project.join("expected").join(name);
+            if std::env::var_os("COLLIN_BLESS").is_some() {
+                std::fs::write(&expected, serde_json::to_string_pretty(&got).unwrap() + "\n").unwrap();
+                continue;
+            }
+            let want = read(&expected);
+            let edges = |v: &serde_json::Value| -> Vec<String> {
+                v["edges"].as_array().unwrap().iter().map(|e| e.to_string()).collect()
+            };
+            let (w, g) = (edges(&want), edges(&got));
+            let only = |a: &[String], b: &[String]| -> String {
+                a.iter().filter(|e| !b.contains(e)).map(|e| format!("\n  {e}")).collect()
+            };
+            assert!(
+                got == want,
+                "{name} moved\ngone:{}\nnew:{}\n(both empty: the order or a field moved)\n\
+                 Read why, then accept it with COLLIN_BLESS=1 cargo test --release jaffle_shop",
+                only(&w, &g),
+                only(&g, &w),
+            );
+        }
+    }
 }

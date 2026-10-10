@@ -1,0 +1,223 @@
+{
+  "version": 1,
+  "source": "collin",
+  "edges": [
+    {
+      "from": "seed.jaffle_shop.raw_payments",
+      "from_col": "amount",
+      "to": "model.jaffle_shop.stg_payments",
+      "to_col": "amount",
+      "kind": "transform"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_payments",
+      "from_col": "order_id",
+      "to": "model.jaffle_shop.stg_payments",
+      "to_col": "order_id",
+      "kind": "passthrough"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_payments",
+      "from_col": "id",
+      "to": "model.jaffle_shop.stg_payments",
+      "to_col": "payment_id",
+      "kind": "rename"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_payments",
+      "from_col": "payment_method",
+      "to": "model.jaffle_shop.stg_payments",
+      "to_col": "payment_method",
+      "kind": "passthrough"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_orders",
+      "from_col": "user_id",
+      "to": "model.jaffle_shop.stg_orders",
+      "to_col": "customer_id",
+      "kind": "rename"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_orders",
+      "from_col": "order_date",
+      "to": "model.jaffle_shop.stg_orders",
+      "to_col": "order_date",
+      "kind": "passthrough"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_orders",
+      "from_col": "id",
+      "to": "model.jaffle_shop.stg_orders",
+      "to_col": "order_id",
+      "kind": "rename"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_orders",
+      "from_col": "status",
+      "to": "model.jaffle_shop.stg_orders",
+      "to_col": "status",
+      "kind": "passthrough"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_customers",
+      "from_col": "id",
+      "to": "model.jaffle_shop.stg_customers",
+      "to_col": "customer_id",
+      "kind": "rename"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_customers",
+      "from_col": "first_name",
+      "to": "model.jaffle_shop.stg_customers",
+      "to_col": "first_name",
+      "kind": "passthrough"
+    },
+    {
+      "from": "seed.jaffle_shop.raw_customers",
+      "from_col": "last_name",
+      "to": "model.jaffle_shop.stg_customers",
+      "to_col": "last_name",
+      "kind": "passthrough"
+    },
+    {
+      "from": "model.jaffle_shop.stg_customers",
+      "from_col": "customer_id",
+      "to": "model.jaffle_shop.customers",
+      "to_col": "customer_id",
+      "kind": "passthrough"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "amount",
+      "to": "model.jaffle_shop.customers",
+      "to_col": "customer_lifetime_value",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_customers",
+      "from_col": "first_name",
+      "to": "model.jaffle_shop.customers",
+      "to_col": "first_name",
+      "kind": "passthrough"
+    },
+    {
+      "from": "model.jaffle_shop.stg_orders",
+      "from_col": "order_date",
+      "to": "model.jaffle_shop.customers",
+      "to_col": "first_order",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_customers",
+      "from_col": "last_name",
+      "to": "model.jaffle_shop.customers",
+      "to_col": "last_name",
+      "kind": "passthrough"
+    },
+    {
+      "from": "model.jaffle_shop.stg_orders",
+      "from_col": "order_date",
+      "to": "model.jaffle_shop.customers",
+      "to_col": "most_recent_order",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_orders",
+      "from_col": "order_id",
+      "to": "model.jaffle_shop.customers",
+      "to_col": "number_of_orders",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "amount",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "amount",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "amount",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "bank_transfer_amount",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "payment_method",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "bank_transfer_amount",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "amount",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "coupon_amount",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "payment_method",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "coupon_amount",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "amount",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "credit_card_amount",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "payment_method",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "credit_card_amount",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_orders",
+      "from_col": "customer_id",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "customer_id",
+      "kind": "passthrough"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "amount",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "gift_card_amount",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_payments",
+      "from_col": "payment_method",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "gift_card_amount",
+      "kind": "aggregate"
+    },
+    {
+      "from": "model.jaffle_shop.stg_orders",
+      "from_col": "order_date",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "order_date",
+      "kind": "passthrough"
+    },
+    {
+      "from": "model.jaffle_shop.stg_orders",
+      "from_col": "order_id",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "order_id",
+      "kind": "passthrough"
+    },
+    {
+      "from": "model.jaffle_shop.stg_orders",
+      "from_col": "status",
+      "to": "model.jaffle_shop.orders",
+      "to_col": "status",
+      "kind": "passthrough"
+    }
+  ]
+}
