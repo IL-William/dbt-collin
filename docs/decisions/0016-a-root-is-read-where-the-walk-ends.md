@@ -117,3 +117,11 @@ a root. A derived table that is not one, missing the name, is still a loss.
 
 On a 3507 model Snowflake project 4 columns of one model, a list of claims to
 exclude, go from lost to roots; the cache is identical.
+
+A `LATERAL FLATTEN`'s `SEQ` and `INDEX` number the rows and the elements: a
+position, which no column of the input holds, so the engine derives them from
+nothing. A walk that ends at one of them, the call read off the syntax tree by
+its alias, ends at a literal too. Since the fork's eighth patch `KEY` and
+`PATH` come from the input, as `VALUE` and `THIS` do (0028). On the same
+project two columns built from an index go from lost to roots, and one built
+from a key, a `CASE` reading it, from root to an edge.

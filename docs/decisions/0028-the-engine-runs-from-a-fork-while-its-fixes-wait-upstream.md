@@ -48,6 +48,8 @@ The patches, in the order they are pinned:
 7. A CTE reusing the name of another in the same statement gets a node of its
    own, its name scoped to its `WITH`, and a `SELECT *` with no schema infers
    its columns per node rather than per name.
+8. A `LATERAL FLATTEN`'s `KEY` and `PATH` derive from its input, as `VALUE` and
+   `THIS` do: for an object they are part of its content.
 
 When upstream releases a patch, the fork rebases onto that release and drops
 it. When it has released them all, the pin goes back to a crates.io version and
@@ -115,3 +117,13 @@ BigQuery models 500 inferred become 579 parsed. Before the plan changed, the
 patch alone already moved 16 inferred Shopify edges: 0027 settles a name
 several parents have by the compile's reading, and that reading no longer
 crossed the two scopes.
+
+Moved to the eighth, tagged `collin-engine-3`, the 3507 model Snowflake project
+gains 402 parsed edges and loses none: 2 from a column's parsed JSON into the
+key of its elements and a `CASE` reading it, and 400 into an element name in a
+model that builds an array of objects out of a hundred columns and flattens it
+back, one per column in each of four union branches. There the keys are
+written in the SQL, the names of the columns each value came from, so the edge
+says which columns the name stands for, as an `UNPIVOT`'s name column would;
+sqlglot reads the same 400. Columns lost in trusted models go from 4 to none.
+Cal-ITP and Shopify do not move.

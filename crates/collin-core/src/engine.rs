@@ -275,6 +275,9 @@ struct ScopeNames {
     /// Lower case names of the derived tables whose rows are a `VALUES` list,
     /// `(derived)` for one with no alias, as the engine labels it.
     values: Vec<String>,
+    /// Lower case names of the `LATERAL FLATTEN` calls, `flatten` for one with
+    /// no alias, as the engine labels it.
+    flattens: Vec<String>,
 }
 
 impl Visitor for ScopeNames {
@@ -292,6 +295,12 @@ impl Visitor for ScopeNames {
     }
 
     fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<()> {
+        if let TableFactor::Function { name, alias, .. } = factor {
+            if name.to_string().eq_ignore_ascii_case("flatten") {
+                let label = alias.as_ref().map_or_else(|| name.to_string(), |a| a.name.to_string());
+                self.flattens.push(label.trim_matches('"').to_lowercase());
+            }
+        }
         if let TableFactor::Derived { alias, subquery, .. } = factor {
             if matches!(subquery.body.as_ref(), SetExpr::Values(_)) {
                 let label = alias.as_ref().map(|a| a.name.to_string());
@@ -581,6 +590,8 @@ struct Scopes {
     star_over_relation: HashSet<String>,
     /// Lower case names of the derived tables written as a `VALUES` list.
     values: HashSet<String>,
+    /// Lower case names of the `LATERAL FLATTEN` calls.
+    flattens: HashSet<String>,
     qualifies: Vec<Qualify>,
     joins: Vec<JoinKeys>,
     predicates: Vec<Predicate>,
@@ -610,6 +621,7 @@ fn scopes(sql: &str, dialect: Dialect) -> Scopes {
         let ctes: HashSet<String> =
             names.ctes.iter().map(|c| c.trim_matches('"').to_lowercase()).collect();
         out.values.extend(names.values.iter().cloned());
+        out.flattens.extend(names.flattens.iter().cloned());
         for (scope, sources) in &names.stars {
             if sources.iter().any(|s| !ctes.contains(s)) {
                 out.star_over_relation.insert(scope.clone());
@@ -1014,6 +1026,7 @@ struct Graph<'r, 'm> {
     tables: &'m HashSet<String>,
     star_over_relation: &'m HashSet<String>,
     values: &'m HashSet<String>,
+    flattens: &'m HashSet<String>,
 }
 
 impl<'r> Graph<'r, '_> {
@@ -1128,14 +1141,18 @@ impl<'r> Graph<'r, '_> {
             } else if let (None, Some((o, n))) = (own, via) {
                 let reads = self.relations_under(o);
                 let label = n.label.trim_matches('"').to_lowercase();
+                let column = node.label.to_lowercase();
                 if reads.is_empty() && self.values.contains(&label) {
                     // A column of a `VALUES` list, `column1` and the rest: the
                     // engine gives the list no columns, but its rows are written
                     // in the SQL, so the walk ends at literals.
                     below.absorb(literal);
+                } else if self.flattens.contains(&label) && matches!(column.as_str(), "seq" | "index") {
+                    // A FLATTEN's SEQ and INDEX number the rows and the elements:
+                    // a position, which no column of the input holds.
+                    below.absorb(literal);
                 } else {
                     let star = self.star_over_relation.contains(&label);
-                    let column = node.label.to_lowercase();
                     below.absorb(Ends::dead_end(DeadEnd::Phantom { via: n.label.to_lowercase(), column, reads, star }));
                 }
             } else if below.unreached {
@@ -1464,7 +1481,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         });
         return out;
     }
-    let Scopes { merged, star_over_relation, values, qualifies, joins, predicates } =
+    let Scopes { merged, star_over_relation, values, flattens, qualifies, joins, predicates } =
         scopes(sql, split_dialect(adapter));
     out.merged_scopes = merged;
 
@@ -1949,6 +1966,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         tables: &tables,
         star_over_relation: &star_over_relation,
         values: &values,
+        flattens: &flattens,
     };
     // Lost is measured against the engine's own edges. A column fed only by the
     // model's own relation counts as fed here although the pass drops that edge:
@@ -2692,6 +2710,24 @@ mod tests {
         let at: Vec<usize> = r.issues.iter().filter_map(|i| i.span.map(|s| s.0)).collect();
         assert!(at.len() > 1, "{at:?}");
         assert!(at.windows(2).all(|w| w[0] <= w[1]), "{at:?}");
+    }
+
+    #[test]
+    fn a_flatten_key_is_read_from_its_input_and_its_index_is_a_root() {
+        // Since the fork's eighth patch a key and a path come from the input
+        // (0028); an index is a position, which no column of the input holds.
+        let r = resolve(
+            "select f.key as element_name, f.index + 1 as position, f.value::string as element_value \
+             from db.s.hx as h, lateral flatten(input => try_parse_json(h.data)) as f",
+            "snowflake",
+            &[vis("DB.S.HX", &["id", "data"])],
+        );
+        let mut edges: Vec<(&str, &str)> =
+            r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
+        edges.sort();
+        assert_eq!(edges, vec![("data", "element_name"), ("data", "element_value")]);
+        assert_eq!(r.roots, vec!["position"]);
+        assert!(r.lost.is_empty());
     }
 
     fn p_table() -> Vec<Visible> {
