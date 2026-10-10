@@ -9,6 +9,10 @@
 //! its node. dbt keys the catalog by unique_id, and one unique_id names a
 //! different table under each target, so an entry describing another table says
 //! nothing about the one this compile builds (0037).
+//!
+//! And its columns are the relation's own. dbt-bigquery lists the fields of a
+//! STRUCT beside it, as `parent.field`: no select writes one, so taken for
+//! columns they made every compile over a STRUCT look short of its table.
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -108,6 +112,13 @@ impl RawCatalog {
                 .collect();
             cols.sort();
             cols.dedup();
+            // A field of a STRUCT column, named after it. A name with a dot and
+            // no column before it is a column of its own, quoted.
+            let field = |c: &String| {
+                c.split_once('.').is_some_and(|(parent, _)| cols.binary_search(&parent.to_string()).is_ok())
+            };
+            let fields: Vec<String> = cols.iter().filter(|c| field(c)).cloned().collect();
+            cols.retain(|c| !fields.contains(c));
             if !cols.is_empty() {
                 out.columns.insert(uid, cols);
             }
@@ -231,5 +242,19 @@ mod tests {
         );
         assert_eq!(w.columns.len(), 3);
         assert!(w.elsewhere.is_empty());
+    }
+
+    #[test]
+    fn a_field_of_a_struct_is_not_a_column() {
+        // dbt-bigquery lists `device.serial` beside `device`. A dotted name with
+        // no column before it is a quoted name of its own.
+        let w = witness(
+            vec![(
+                "model.shop.devices",
+                entry(Some("P"), "DS", "DEVICES", &["id", "device", "device.serial", "device.loc.lat", "a.b"]),
+            )],
+            &[("model.shop.devices", "`p`.`ds`.`devices`")],
+        );
+        assert_eq!(w.columns["model.shop.devices"], vec!["a.b", "device", "id"]);
     }
 }
