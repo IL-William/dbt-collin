@@ -11,9 +11,9 @@ license = "FSL-1.1-MIT"
 [workspace.dependencies]
 # The engine, pinned to a fork carrying fixes not yet released upstream: each
 # is a patch upstream can take as it is, with its own test (0028). The commit
-# is tagged collin-engine-1 there, so that no rewrite of a branch can take it
+# is tagged collin-engine-2 there, so that no rewrite of a branch can take it
 # away.
-flowscope-core = { git = "https://github.com/IL-William/flowscope", rev = "ffb22669880e0b3009af492e3ddf5f1c77044a35" }
+flowscope-core = { git = "https://github.com/IL-William/flowscope", rev = "7218b39905643af5abd60fac1d0f01c8422b9d16" }
 # The engine's own parser version, named here only to walk its syntax tree.
 sqlparser = { version = "0.61", features = ["visitor"] }
 serde = { version = "1", features = ["derive"] }

@@ -200,12 +200,6 @@ lists propagate from the leaves instead of needing a warehouse.
   A dependency or the model itself named in two parts where dbt wrote three is
   compared as written and listed here: the database that would complete it is
   the session's, and collin does not guess it.
-- **Two CTEs of one name in nested `WITH` blocks** are one scope to the engine,
-  their columns crossed, so a compile with them is set aside and its edges
-  inferred
-  ([0018](docs/decisions/0018-two-scopes-of-one-name-are-not-trusted.md)). Two
-  derived tables of one name the fork keeps apart
-  ([0028](docs/decisions/0028-the-engine-runs-from-a-fork-while-its-fixes-wait-upstream.md)).
 - **Two expressions between the same two columns**, one per branch of a union
   straight off one CTE, reach the walk as one: the engine keeps one edge per
   pair of columns, and the role is that edge's

@@ -59,3 +59,26 @@ On the same project 9 models are named, the cache is identical, default and
 models were already set aside. The ninth defines one CTE twice in nested
 `WITH` blocks; it published no edge, so it only moves from parsed to
 unresolved, and its one lost column leaves the count, 429 to 428.
+
+## Amended the same day
+
+The fork's seventh patch keys a CTE by its occurrence, as the fourth keys a
+derived table, and scopes its name to its `WITH` (0028). The plan no longer
+sets these compiles aside. The models are still counted, and their names are on
+their entry when they have one for another reason; a model read right has none.
+A test asserts that two CTEs of one name are read apart, so a pin that lost the
+patch fails it first.
+
+On the 3507 model Snowflake project the cache is identical, default and
+`--indirect`. Its one model with two CTEs of one name, a date spine reading
+only itself, goes from set aside to parsed and still publishes nothing, so its
+two columns without an edge join the count, 117 to 119.
+
+The public projects show what the rule cost. In Fivetran's Shopify package dbt
+inlines ephemeral models that each name a CTE `final` or `orders`: 23 models
+were set aside, 16 of them marts, and their 630 inferred edges become 1303
+parsed ones, every one of which sqlglot reads the same way. On Cal-ITP's 624
+BigQuery models, a macro wraps each source in its own `WITH ranked`: 29 models
+are read, 500 inferred edges becoming 579 parsed ones. Ten of their columns lose
+an edge inferred by name and now show as lost, read through an `UNNEST` or a
+`PIVOT` the engine does not follow.

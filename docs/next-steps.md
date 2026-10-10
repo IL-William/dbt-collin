@@ -21,7 +21,7 @@ constants aside, 97.6%. The 5700 without an edge, by cause:
 | 61 | Compiles set aside, where no parent has the name: downstream of the same, and an audit table with no parent | As above, or none |
 | 42 | Read from a raw table no source declares (35), or from a parent the target lacks | Declare the source |
 | 5 | No parent: an audit table | None |
-| 2 | A date spine set aside for two CTEs of one name in nested `WITH` blocks (0018) | None that buys an edge |
+| 2 | A date spine set aside for two CTEs of one name in nested `WITH` blocks (0018), read since the engine's seventh patch (0028) | None: it reads only itself |
 
 58 more compiles do not parse for the same reason, another macro writing
 `select ,`, and have no column list to count. Nearly all of it is fixed in the
@@ -94,21 +94,18 @@ The 1162 without one that are not roots, by first cause:
 | 470 | A field of a STRUCT, `metadata.extract_ts`, read as a column of a table named `metadata` | The engine |
 | 395 | The fields of a STRUCT, which the catalog lists as columns, `device.fo_device_type`: no select can write one. They also mark 22 of the 38 degraded compiles | collin: a field is not a column |
 | 121 | A column of an `UNNEST` alias or of a `PIVOT`'s output, in 57 and 8 models | The engine |
-| 56 | 29 models set aside for two CTEs of one name (0018): a macro wraps each source in its own `WITH ranked` | The engine |
+| 56 | 29 models set aside for two CTEs of one name (0018): a macro wraps each source in its own `WITH ranked`. Read since the engine's seventh patch (0028), 500 inferred edges becoming 579 parsed ones | Done |
 | 120 | Not read yet: 51 settled column by column, 42 inferred where no parent has the name, 23 in one audit log model, 4 in a compile that does not parse | |
 
 **Fivetran's Shopify package**, a fixture (0038): 240 models, 4875 edges, 89.6%
 of columns covered. sqlglot reads 4244 of its 4245 parsed edges the same way.
-16 marts are set aside, their 630 edges inferred: ephemeral models are inlined
+16 marts were set aside, their 630 edges inferred: ephemeral models are inlined
 as CTEs, each with its own `WITH`, and two of them name a CTE alike (0018).
+Since the engine's seventh patch (0028) they are read: 1303 parsed edges,
+5548 in all, and sqlglot reads 5547 of them the same way.
 
 ## Residuals already named
 
-- **Two CTEs of one name in nested `WITH` blocks** still merge in the engine
-  (0018). On the project above one model has them, a date spine reading no
-  table, and fixing the engine adds no edge there. On the public projects it is
-  the largest fix the engine owes: 16 of Shopify's marts, 630 edges inferred
-  that the SQL would give, and 29 of Cal-ITP's models.
 - **A column read beside an alias of the same name** is credited to the alias:
   in `country_code as country, country as country_name`, the SQL reads the
   table's `country`. One edge in Shopify.

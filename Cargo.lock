@@ -116,7 +116,7 @@ checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 [[package]]
 name = "flowscope-core"
 version = "0.9.2"
-source = "git+https://github.com/IL-William/flowscope?rev=ffb22669880e0b3009af492e3ddf5f1c77044a35#ffb22669880e0b3009af492e3ddf5f1c77044a35"
+source = "git+https://github.com/IL-William/flowscope?rev=7218b39905643af5abd60fac1d0f01c8422b9d16#7218b39905643af5abd60fac1d0f01c8422b9d16"
 dependencies = [
  "chrono",
  "indexmap",
