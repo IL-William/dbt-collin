@@ -1,0 +1,15 @@
+[package]
+name = "collin-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CLI for collin"
+
+[[bin]]
+name = "collin"
+path = "src/main.rs"
+
+[dependencies]
+collin-core = { path = "../collin-core" }
+serde_json.workspace = true

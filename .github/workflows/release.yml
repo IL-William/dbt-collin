@@ -1,0 +1,141 @@
+name: release
+
+# A version in Cargo.toml with no tag yet is released from main: collin is built
+# for each target, every archive's provenance is attested, and the tag and the
+# release are created together at the commit that was built (0035). The notes
+# list the pull requests merged since the previous release.
+#
+# The tag is made here rather than pushed by hand: a tag pushed with this
+# workflow's token would start no workflow, and one pushed by hand is a step
+# that gets forgotten.
+#
+# A pull request that touches this file runs the same builds without
+# publishing: tags here cannot be moved or deleted, so a broken release has to
+# be found before its tag exists.
+on:
+  push:
+    branches: [main]
+    # A release needs a new version, and this file in case the last attempt
+    # failed for a reason fixed here.
+    paths: [Cargo.toml, .github/workflows/release.yml]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+  # A release that failed on something outside this repository, retried on
+  # main as it is.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two pushes to main in a row must not both find the same version untagged.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The version Cargo.toml names, and whether main still owes it a release.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      due: ${{ steps.read.outputs.due }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: read
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "collin-cli") | .version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            due=false
+          elif gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$version" --silent 2>/dev/null; then
+            due=false
+          else
+            due=true
+          fi
+          echo "due=$due" >> "$GITHUB_OUTPUT"
+          echo "v$version, release due: $due"
+
+  build:
+    needs: version
+    # Nothing to build on main when the version already has its release.
+    if: github.event_name == 'pull_request' || needs.version.outputs.due == 'true'
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      # psm, under sqlparser, compiles C, and a static Linux binary needs musl's
+      # compiler for it.
+      - if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # No shared cache here: nothing a branch wrote into the CI cache can reach a
+      # published binary.
+      - run: cargo test --locked --release --target "$TARGET"
+      - run: cargo build --locked --release --target "$TARGET" -p collin-cli
+      - name: Package
+        shell: bash
+        env:
+          DUE: ${{ needs.version.outputs.due }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if [ "$DUE" = true ]; then version=v$VERSION; else version=check; fi
+          dir="collin-$version-$TARGET"
+          mkdir "$dir"
+          cp "target/$TARGET/release/collin" LICENSE README.md "$dir/"
+          tar -czf "$dir.tar.gz" "$dir"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.target }}
+          path: collin-*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # Only this job can write, and only on main with a version still untagged.
+  release:
+    needs: [version, build]
+    if: needs.version.outputs.due == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # The attestation is signed with this workflow's identity.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          # The tag is created with the release, at the commit that was built.
+          # The notes are GitHub's list of what was merged since the last
+          # release, not the message of whichever commit started this run: a
+          # retry or a fix to this file would otherwise describe itself.
+          gh release create "$TAG" *.tar.gz SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "collin $TAG" --generate-notes

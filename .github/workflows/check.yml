@@ -1,0 +1,59 @@
+name: check
+
+on:
+  push:
+  pull_request:
+  # Advisories are published without anything being pushed, so the audit also
+  # runs every Monday. A failure there is emailed to whoever last edited this
+  # schedule.
+  schedule:
+    - cron: "41 6 * * 1"
+
+# Nothing here writes anything back.
+permissions:
+  contents: read
+
+# Third-party actions are pinned to a commit, not a tag: a tag can be moved to
+# point at new code. Dependabot bumps these pins with the version comment.
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+      # Merging a bump releases it (0035), so the install commands have to name
+      # the version Cargo.toml is at before it lands.
+      - name: The README installs this version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "collin-cli") | .version')
+          for want in "download/v$version/collin-v$version-" "--tag v$version "; do
+            if ! grep -qF -- "$want" README.md; then
+              echo "README.md does not install v$version: no \"$want\"" >&2
+              exit 1
+            fi
+          done
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test
+
+  # The lockfile against the RustSec advisory database. cargo-audit is run
+  # directly rather than through an action: it needs no token that way.
+  #
+  # This is the job Dependabot cannot do. Dependabot offers an upgrade when one
+  # exists; cargo audit says an advisory applies to what is pinned right now,
+  # which is the part worth failing a build over.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit

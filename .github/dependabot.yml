@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # Lockfile bumps only: a version range change is a decision, not a chore.
+    # flowscope-core in particular is the one dependency 0002 says is chosen on
+    # measurement, so widening its range is something a person signs off on.
+    versioning-strategy: lockfile-only
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
