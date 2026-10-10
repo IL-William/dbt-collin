@@ -1435,6 +1435,13 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
             .collect(),
         ..Default::default()
     };
+    // The engine gives some warnings in an order that changes from one run to
+    // the next, so the report did too. By where they sit in the SQL, which is
+    // also the order a parse meets them in.
+    out.issues.sort_by(|a, b| {
+        let at = |i: &Issue| i.span.unwrap_or((usize::MAX, usize::MAX));
+        (at(a), &a.code, &a.message).cmp(&(at(b), &b.code, &b.message))
+    });
     out.approximate = out.issues.iter().any(|i| i.degrading);
     out.unknown_columns = out
         .issues
@@ -2670,6 +2677,21 @@ mod tests {
         let r = resolve("select d.z as z from (select a from db.s.p) as d", "snowflake", &p_table());
         assert!(r.roots.is_empty());
         assert_eq!(r.lost.len(), 1);
+    }
+
+    #[test]
+    fn issues_come_in_the_order_they_sit_in_the_sql() {
+        // The engine gives the later of these two warnings first. On a project
+        // it gave others in an order that changed from run to run, and the
+        // report with it.
+        let sql = "with c1 as (select a, b from db.s.p), c2 as (select a, b from db.s.q) \
+                   select coalesce(round(b, 2), 0) as b2, coalesce(round(a, 2), 0) as a2 \
+                   from c1 join c2 on c1.a = c2.a";
+        let tables = [vis("DB.S.P", &["a", "b", "c"]), vis("DB.S.Q", &["a", "b", "c"])];
+        let r = resolve(sql, "snowflake", &tables);
+        let at: Vec<usize> = r.issues.iter().filter_map(|i| i.span.map(|s| s.0)).collect();
+        assert!(at.len() > 1, "{at:?}");
+        assert!(at.windows(2).all(|w| w[0] <= w[1]), "{at:?}");
     }
 
     fn p_table() -> Vec<Visible> {
