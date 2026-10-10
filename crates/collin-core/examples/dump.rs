@@ -83,7 +83,7 @@ fn dump() -> Result<(usize, PathBuf), String> {
     if std::fs::read_dir(&out).is_ok_and(|mut d| d.next().is_some()) {
         return Err(format!("{} is not empty", out.display()));
     }
-    let Loaded { project, warehouse } = lineage::load(&opts)?;
+    let Loaded { project, warehouse, .. } = lineage::load(&opts)?;
     std::fs::create_dir_all(&out).map_err(|e| format!("cannot create {}: {e}", out.display()))?;
 
     // A versioned model shares its name with its other versions, so those take

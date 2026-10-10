@@ -42,6 +42,7 @@ is built this way, for whoever changes it next.
 | [0034](0034-collin-says-its-version.md) | collin says its version, and the version moves when dbt-lens needs it to | changing what `collin --version` prints, the cache's `producer`, or the version |
 | [0035](0035-merging-a-version-bump-releases-it.md) | Merging a version bump releases it | changing how a release is started, what makes the tag, or the install commands in the README |
 | [0036](0036-free-to-use-not-to-resell.md) | Free to use, not to resell | changing the license or the copyright line, or linking code under another license |
+| [0037](0037-a-catalog-entry-for-another-table-is-no-witness.md) | A catalog entry for another table is no witness | changing how `catalog.json` is matched to the manifest, or trusting an entry because its unique_id is right |
 
 ## The other side of the boundary
 

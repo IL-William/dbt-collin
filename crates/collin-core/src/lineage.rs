@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::cache::{self, Cache};
-use crate::catalog::RawCatalog;
+use crate::catalog::{Elsewhere, RawCatalog};
 use crate::engine::{self, Visible};
 use crate::manifest::{norm_relation, Node, Project, RawManifest, SqlSource};
 use crate::report::{
@@ -98,6 +98,9 @@ pub struct Loaded {
     pub project: Project,
     /// unique_id to column names, from `catalog.json`. Empty without one.
     pub warehouse: HashMap<String, Vec<String>>,
+    /// Catalog entries describing another table than the manifest's, left out
+    /// of `warehouse` (0037).
+    pub catalog_elsewhere: Vec<Elsewhere>,
 }
 
 /// What one pass produced, before any of it is written.
@@ -168,8 +171,9 @@ fn node_for(project: &Project, read: &HashMap<String, Option<String>>, relation:
 }
 
 pub fn generate(opts: &Options) -> Result<Outcome, String> {
-    let Loaded { project, warehouse } = load(opts)?;
-    let Run { edges, report } = run(&project, warehouse, opts);
+    let Loaded { project, warehouse, catalog_elsewhere } = load(opts)?;
+    let Run { edges, mut report } = run(&project, warehouse, opts);
+    report.set_catalog_elsewhere(catalog_elsewhere);
     Cache::new(opts.target.clone(), edges).write(&opts.out)?;
     report.write(&opts.report)?;
     Ok(Outcome { totals: report.totals, out: opts.out.clone(), report: opts.report.clone() })
@@ -183,12 +187,13 @@ pub fn load(opts: &Options) -> Result<Loaded, String> {
     read_compiled_files(&mut project, &opts.target_dir());
 
     let catalog_path = opts.catalog_path();
-    let warehouse = if catalog_path.exists() {
-        RawCatalog::load(&catalog_path)?.columns()
+    let witness = if catalog_path.exists() {
+        let relation_of = |uid: &str| project.nodes.get(uid).map(|n| n.relation.as_str()).filter(|r| !r.is_empty());
+        RawCatalog::load(&catalog_path)?.columns(relation_of)
     } else {
-        HashMap::new()
+        Default::default()
     };
-    Ok(Loaded { project, warehouse })
+    Ok(Loaded { project, warehouse: witness.columns, catalog_elsewhere: witness.elsewhere })
 }
 
 /// The pass itself, over a project already in memory.
@@ -3065,5 +3070,54 @@ mod tests {
         let m = &r.report.models[0];
         let listed = (m.unique_id.as_str(), m.provenance, m.edges);
         assert_eq!(listed, ("model.p.behind", "unresolved", 0));
+    }
+
+    #[test]
+    fn a_catalog_of_another_target_witnesses_nothing() {
+        // The model's entry describes the table a personal target built, which
+        // still has a column the code dropped. Taken as the witness, it would
+        // withhold `amount` and look for a parent of `legacy`; set aside, the
+        // compile stands unchecked, and the report says why (0037).
+        let t = Target::new("catalog-elsewhere");
+        let manifest = serde_json::json!({
+            "metadata": {"dbt_version": "1.11.8", "project_name": "shop", "adapter_type": "snowflake"},
+            "sources": {"source.shop.raw.orders": {
+                "name": "orders", "resource_type": "source", "relation_name": "db.raw.orders"}},
+            "nodes": {"model.shop.orders": {
+                "name": "orders", "resource_type": "model", "relation_name": "db.sales.orders",
+                "compiled_code": "select id, amount from db.raw.orders",
+                "depends_on": {"nodes": ["source.shop.raw.orders"]},
+                "config": {"materialized": "table"}}},
+            "parent_map": {"model.shop.orders": ["source.shop.raw.orders"]}
+        });
+        let entry = |db: &str, schema: &str, name: &str, cols: &[&str]| {
+            let cols: serde_json::Map<String, serde_json::Value> =
+                cols.iter().map(|c| (c.to_string(), serde_json::json!({"name": c}))).collect();
+            serde_json::json!({"metadata": {"database": db, "schema": schema, "name": name}, "columns": cols})
+        };
+        let catalog = serde_json::json!({
+            "sources": {"source.shop.raw.orders": entry("DB", "RAW", "ORDERS", &["ID", "AMOUNT"])},
+            "nodes": {"model.shop.orders": entry("DB", "DBT_ME", "ORDERS", &["ID", "LEGACY"])}
+        });
+        t.write("target/manifest.json", manifest.to_string());
+        t.write("target/catalog.json", catalog.to_string());
+
+        let loaded = load(&Options::new(t.0.clone())).unwrap();
+        assert!(loaded.warehouse.contains_key("source.shop.raw.orders"), "the source's entry is its own");
+        assert!(!loaded.warehouse.contains_key("model.shop.orders"));
+
+        let o = generate(&Options::new(t.0.clone())).unwrap();
+        assert_eq!((o.totals.catalog_elsewhere, o.totals.unchecked, o.totals.degraded), (1, 1, 0));
+        assert_eq!((o.totals.edges_parsed, o.totals.edges_inferred, o.totals.columns_withheld), (2, 0, 0));
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&o.report).unwrap()).unwrap();
+        assert_eq!(
+            report["catalog_elsewhere"],
+            serde_json::json!([{
+                "unique_id": "model.shop.orders",
+                "relation": "db.sales.orders",
+                "catalog_relation": "DB.DBT_ME.ORDERS"
+            }])
+        );
     }
 }

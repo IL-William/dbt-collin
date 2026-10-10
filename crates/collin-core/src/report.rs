@@ -53,6 +53,12 @@ pub struct Report {
     /// model depends on both or on neither (0014).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub relation_collisions: Vec<RelationCollision>,
+    /// Catalog entries describing another table than the one the manifest
+    /// gives their node, usually one built under another target, and not used:
+    /// their models are checked against nothing (0037). A finding about the
+    /// inputs rather than a model, so it sits at the top.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub catalog_elsewhere: Vec<CatalogElsewhere>,
     /// Columns the SQL reads to decide which rows exist, by model: join keys,
     /// filters, dedup keys, each saying whether the model also carries it
     /// through to an output.
@@ -85,6 +91,15 @@ pub struct ModelReads {
 }
 
 #[derive(Serialize)]
+pub struct CatalogElsewhere {
+    pub unique_id: String,
+    /// The table the manifest names.
+    pub relation: String,
+    /// The table the catalog entry describes.
+    pub catalog_relation: String,
+}
+
+#[derive(Serialize)]
 pub struct RelationCollision {
     pub relation: String,
     /// Every dbt node claiming it, sorted. The first is the one a model that
@@ -114,6 +129,9 @@ pub struct Totals {
     pub degraded: usize,
     /// No catalog entry, so nothing could be checked.
     pub unchecked: usize,
+    /// Catalog entries set aside for describing another table, whose models
+    /// count as unchecked. See `Report::catalog_elsewhere`.
+    pub catalog_elsewhere: usize,
     /// Degraded models whose compile kept its parsed edges on the columns the
     /// warehouse has too. See `Plan::PerColumn` in the pass.
     pub per_column: usize,
@@ -386,6 +404,20 @@ pub struct Thin {
 }
 
 impl Report {
+    /// Kept apart from the pass, which never sees these entries: the catalog
+    /// is read, and set aside, before it starts.
+    pub fn set_catalog_elsewhere(&mut self, elsewhere: Vec<crate::catalog::Elsewhere>) {
+        self.totals.catalog_elsewhere = elsewhere.len();
+        self.catalog_elsewhere = elsewhere
+            .into_iter()
+            .map(|e| CatalogElsewhere {
+                unique_id: e.unique_id,
+                relation: e.relation,
+                catalog_relation: e.catalog_relation,
+            })
+            .collect();
+    }
+
     pub fn write(&self, path: &std::path::Path) -> Result<(), String> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
