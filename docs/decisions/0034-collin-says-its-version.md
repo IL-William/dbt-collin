@@ -49,7 +49,7 @@ out `generated_at`: a bump changes it without moving an edge.
 
 ## Amended the same day
 
-0.2.0 is released with nothing in dbt-lens relying on it. A BigQuery relation
+0.3.0 is released with nothing in dbt-lens relying on it. A BigQuery relation
 is now matched through its backticks, so its edges reach the dbt nodes instead
 of leaving through `rel:`, and a catalog entry for another target's table is
 set aside (0037). Both change what the cache holds for someone's project, which
