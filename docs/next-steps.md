@@ -2,36 +2,39 @@
 
 Where the lineage stands, and what would raise it. Measured on 2026-10-10 on a
 pinned copy of a 3507 model Snowflake project, its manifest and its catalog
-generated on one target, the engine at the fork's `collin-engine-1`. Not a
-decision: a list to come back to.
+generated on one target with that target's environment, the engine at the
+fork's `collin-engine-2`. Not a decision: a list to come back to.
 
 ## Where the columns without an edge are
 
-Of 110 155 columns, 104 455 have an edge, 94.8%. Against the warehouse where a
-model has a table, 3316 of the 3507, and its YAML otherwise, columns built from
-constants aside, 97.6%. The 5700 without an edge, by cause:
+Every compile parses. Of 114 897 columns, 111 426 have an edge, 97.0%. Against
+the warehouse where a model has a table, 3499 of the 3507, and its YAML
+otherwise, columns built from constants aside, 111 313 of 111 343, 99.97%. The
+3471 without an edge, by cause:
 
 | Columns | Cause | Lever |
 | --- | --- | --- |
-| 3372 | Built from constants: literals, functions of literals, a date spine | None: they have no parent, and the report counts them as roots |
-| 1763 | Columns the table has and the code no longer produces, in 158 models settled column by column (0029). 1365 of them are 13 metadata columns 105 tables of one family still have and 104 of their sources no longer do | Rebuild those tables |
-| 265 | One compile that does not parse: an introspecting macro found no column in a parent the target lacks, and wrote `select from` | Build the parent first, or make the macro fail on an empty list |
-| 107 | Columns the YAML documents for compiles that read a name their own CTE does not project, from the same empty introspection | As above |
-| 83 | Read through a star over a parent the target lacks, or downstream of a compile that does not parse | As above |
-| 61 | Compiles set aside, where no parent has the name: downstream of the same, and an audit table with no parent | As above, or none |
-| 42 | Read from a raw table no source declares (35), or from a parent the target lacks | Declare the source |
-| 5 | No parent: an audit table | None |
-| 2 | A date spine set aside for two CTEs of one name in nested `WITH` blocks (0018), read since the engine's seventh patch (0028) | None: it reads only itself |
+| 3441 | Built from constants: literals, functions of literals, a date spine | None: they have no parent, and the report counts them as roots |
+| 21 | Three models that read only their own table: two audit tables written outside dbt, whose incremental compile is `select * from` itself `where 1 = 0` or close to it, and a date spine reading its last date | collin: a category of its own rather than a degraded compile and lost columns. The project: a table written outside dbt can be declared as a source |
+| 4 | Constants in a `VALUES` list, read as `column1` to `column4` | collin or the engine: a column of a `VALUES` list is a constant |
+| 4 | A `LATERAL FLATTEN`'s `KEY` and `INDEX`: 1 over a column's JSON, 3 over an array the SQL builds from literals and columns | The engine: the key of a column's JSON comes from that column, as `VALUE` does (0028); an index, and keys written in the SQL, are roots |
+| 1 | A view older than its code: it has a column neither the code nor its source has | Rebuild the view |
 
-58 more compiles do not parse for the same reason, another macro writing
-`select ,`, and have no column list to count. Nearly all of it is fixed in the
-project and in the target's tables, not here: the report names every model.
+The report names every one, with where the walk back stopped. It does not say
+what to do: that is the next thing worth adding.
 
-An independent reader backs the first row. Following every root through its
-CTEs, it finds 3360 of the 3377 ending at no table. Of the other 17, 15 reach
-an incremental model's own table (0012), one is a literal the check misread,
-and one is a `LATERAL FLATTEN`'s `INDEX` (below). The name read through a star
-in an expression, the residual 0030 leaves, costs nothing here.
+## A target compiled without its environment
+
+The same project was first measured on a compile for this target made without
+its environment file, so every model and source pointed at another
+environment's databases, and so did the catalog. There 94.8% of columns had an
+edge, and the gaps read like the project's own: 59 compiles an introspecting
+macro wrote as `select ,` or `select from`, because the parent it read did not
+exist in that environment; 1763 columns of tables built by older code; raw
+tables no source declares. None of it was there in the right environment.
+collin cannot tell which environment a target was meant for, but a project
+whose models of one target sit in databases named for another is a finding it
+could raise.
 
 ## What a catalog of another target did
 
@@ -46,36 +49,41 @@ witnesses only the table the manifest names
 Coverage says a column has an edge, not that the edge is right. Every parsed
 edge was compared with an independent reading of the same SQL by sqlglot,
 handed the column lists the engine was handed, names compared without case as
-collin compares them. Of the 3507 models, 3394 were compared: 71 are set aside
-or do not parse, and sqlglot refuses 42 whose parent has no column list.
+collin compares them. 3506 of the 3507 models were compared; the other, an
+audit table reading only itself, has no parsed edge.
 
 | | Edges |
 | --- | --- |
-| Read by both | 115 038 |
-| By collin alone | 245 |
-| By sqlglot alone | 140 |
+| Read by both | 132 753 |
+| By collin alone | 30 |
+| By sqlglot alone | 1766 |
 
-Each disagreement was read in the SQL.
+The disagreements sit in 10 models, and each was read in the SQL.
 
-- **collin alone and right, 242.** 215 come out of a raw table no source
-  declares, of which sqlglot was given no column. 17 sit under
-  `UNION ALL BY NAME`, which sqlglot pairs by position: its own 134 edges in
-  that model are those pairings, every one wrong. 7 sit under a top level
-  select in parentheses the comparison did not read, and 3 pass through a
-  recursive CTE, which sqlglot does not follow.
+- **collin alone and right, 27.** 17 sit under `UNION ALL BY NAME`, which
+  sqlglot pairs by position: its own 134 edges in that model are those
+  pairings, every one wrong. 7 sit under a top level select in parentheses the
+  comparison did not read, and 3 pass through a recursive CTE, which sqlglot
+  does not follow.
+- **sqlglot alone and wrong, 1758.** The 134 pairings, and 1624 in two models
+  that build an array of objects out of a hundred columns and `LATERAL FLATTEN`
+  it: sqlglot credits each element's index and key to every one of those
+  columns, where the index is a position and the keys are literals in the SQL.
 - **collin wrong, 3.** A window's partition key written `cte.k`, credited to
   the other side of the join, which has a `k` too. 0031 reads a window's keys
   against the scope the edge comes from, and does not read the qualifier: it
   rejected binding one by reading the `FROM` clauses.
-- **collin missing, 3.** Two columns built from a `LATERAL FLATTEN`'s `KEY`
-  and `INDEX`, which the engine derives from nothing, where it derives `VALUE`
-  and `THIS` from the input (0028). One `ARRAY_AGG ... WITHIN GROUP (ORDER BY
-  c)`, where collin does not count `c` as an input of the array its order
-  shapes.
+- **collin missing, 5.** Two window `ORDER BY` keys qualified with the other
+  relation of a join, dropped for the same reason. Two columns built from a
+  `LATERAL FLATTEN`'s `KEY` over a column's parsed JSON, which the engine
+  derives from nothing, where it derives `VALUE` and `THIS` from the input
+  (0028). One `ARRAY_AGG ... WITHIN GROUP (ORDER BY c)`, where collin does not
+  count `c` as an input of the array its order shapes.
 
-Six edges in 115 286, then, as far as the SQL shows. The three wrong ones sit
-beside a right edge into the same column. Of the two `FLATTEN` columns, one is
-among the 83 lost above and one among the roots.
+Eight edges in 132 783, then, as far as the SQL shows. An independent reader
+backs the roots too: following each through its CTEs, 3424 of the 3441 end at
+no table. Of the other 17, 15 reach an incremental model's own table (0012),
+one is a literal the check misread, and one is the `FLATTEN` key above.
 
 ## On public projects
 
@@ -86,8 +94,9 @@ others.
 624 BigQuery models, manifest and catalog from one run, pinned outside the tree.
 dbt quotes a BigQuery relation in backticks, which `norm_relation` kept, so no
 relation matched and 19 594 of 20 386 edges left the graph through `rel:`.
-With that fixed, 92.5% of columns have an edge and 93.4% against the warehouse.
-The 1162 without one that are not roots, by first cause:
+With that fixed, 92.5% of columns had an edge and 93.4% against the warehouse;
+with the engine's seventh patch too, 92.8% and 93.6%. The 1162 without one that
+were not roots before that patch, by first cause:
 
 | Columns | Cause | Where it would be fixed |
 | --- | --- | --- |
@@ -110,12 +119,17 @@ Since the engine's seventh patch (0028) they are read: 1303 parsed edges,
   in `country_code as country, country as country_name`, the SQL reads the
   table's `country`. One edge in Shopify.
 - **An inferred column several parents could give** is settled by the compile,
-  by every candidate, or by manifest order (0027): 35 by every candidate and 58
-  by order here.
+  by every candidate, or by manifest order (0027). None here: one edge is
+  inferred.
 - **`* REPLACE (...)` and `* ILIKE '...'`** are not read: the star expands to
   every column.
 - **A qualified window key** is read against the scope its edge comes from, so
   `partition by b.k` in a join of `a` and `b` that both have `k` credits `a.k`
-  when the windowed column comes from `a`: 3 edges here.
+  when the windowed column comes from `a`, and an `order by b.x` is dropped: 3
+  edges wrong and 2 missing here.
 - **`LATERAL FLATTEN`'s `KEY`, `PATH` and `INDEX`** derive from nothing in the
-  engine, though each describes the input: 2 edges here.
+  engine. Over a column's JSON the key comes from that column: 2 edges missing
+  here. Over an array the SQL builds, the index is a position and the keys are
+  literals, which is a root, not the lost column it shows as: 3 columns here.
+- **A `VALUES` list** read as `column1` to `columnN` comes out lost, through a
+  derived table with no source, where its columns are constants: 4 here.

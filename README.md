@@ -103,27 +103,28 @@ nothing else in a dbt project looks.
 ## Measured
 
 On a 3507 model Snowflake project, its manifest and catalog generated on one
-target, about 5 seconds end to end:
+target with that target's environment, about 8 seconds end to end:
 
 | | |
 | --- | --- |
-| Models parsed | 3448 / 3507, and every failure is invalid SQL rather than a parser gap |
-| Edges | 119 573: 117 926 parsed, 1647 inferred |
-| Columns covered | 94.8%, and 97.6% against a list this tool did not produce |
+| Models parsed | 3507 / 3507 |
+| Edges | 132 955: 132 954 parsed, 1 inferred |
+| Columns covered | 97.0%, and 99.97% against a list this tool did not produce: 111 313 of 111 343 |
 | Columns emitted that the warehouse does not have | 0 |
-| Confirmed against the warehouse | 3154 of the 3316 models `catalog.json` covers |
-| Contradicted by it and settled column by column | 158 |
-| Output columns of trusted models with no edge, named | 117 |
-| Columns read to choose rows | 6847, 2503 never projected, in the report unless `--indirect` |
-| Parsed edges an independent reading of the SQL shows wrong | 3 of 115 283 |
+| Confirmed against the warehouse | 3496 of the 3499 models `catalog.json` covers |
+| Contradicted by it and settled column by column | 2 |
+| Output columns of trusted models with no edge, named | 11 |
+| Columns read to choose rows | 7674, 2804 never projected, in the report unless `--indirect` |
+| Parsed edges an independent reading of the SQL shows wrong | 3 of 132 783, and 5 missing |
 
 Coverage is quoted twice on purpose. For a model with no `catalog.json` entry,
-191 of the 3507 here, the usual figure measures the compile against its own
+8 of the 3507 here, the usual figure measures the compile against its own
 output. The second measures it against the warehouse where there is one and the
-YAML otherwise, minus the columns built from literals, which have no parent to
-find. What keeps either from 100%, and how the edges were checked, is in
-[`docs/next-steps.md`](docs/next-steps.md): nearly all of it is fixed in the
-project's tables and macros, not here.
+YAML otherwise, minus the 3441 columns built from literals, which have no parent
+to find. The 30 columns left, and how the edges were checked, are in
+[`docs/next-steps.md`](docs/next-steps.md). Compiled for the same target without
+its environment file, against another environment's databases, the same
+project measured 94.8%: what a compile reads is the environment's.
 
 ## Design
 
