@@ -100,6 +100,24 @@ The warehouse disagreeing with the
 YAML means the documentation is stale, which the report says out loud because
 nothing else in a dbt project looks.
 
+## Findings
+
+The report names every model with something to say, field by field, and
+gathers them into `findings`: the models that share one cause, who can act on
+it (the manifest and catalog collin was handed, the project, or collin itself),
+what collin saw and what it usually means, and what to do. The CLI prints
+their titles at the end of a run:
+
+```
+  findings, in the report
+    project  error    59 compiles do not parse
+    project  warning  149 tables have columns the code no longer writes
+    project  info     3 models read nothing but their own table
+```
+
+A finding adds nothing the models' entries do not say
+([0040](docs/decisions/0040-a-finding-says-what-to-do.md)).
+
 ## Measured
 
 On a 3507 model Snowflake project, its manifest and catalog generated on one

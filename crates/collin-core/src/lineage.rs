@@ -89,6 +89,7 @@ impl Options {
 
 pub struct Outcome {
     pub totals: Totals,
+    pub findings: Vec<crate::findings::Finding>,
     pub out: PathBuf,
     pub report: PathBuf,
 }
@@ -174,9 +175,15 @@ pub fn generate(opts: &Options) -> Result<Outcome, String> {
     let Loaded { project, warehouse, catalog_elsewhere } = load(opts)?;
     let Run { edges, mut report } = run(&project, warehouse, opts);
     report.set_catalog_elsewhere(catalog_elsewhere);
+    report.findings = crate::findings::of(&report);
     Cache::new(opts.target.clone(), edges).write(&opts.out)?;
     report.write(&opts.report)?;
-    Ok(Outcome { totals: report.totals, out: opts.out.clone(), report: opts.report.clone() })
+    Ok(Outcome {
+        totals: report.totals,
+        findings: report.findings,
+        out: opts.out.clone(),
+        report: opts.report.clone(),
+    })
 }
 
 /// Everything the pass reads from disk. The catalog is optional: without one

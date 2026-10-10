@@ -69,6 +69,10 @@ pub struct Report {
     /// reading: that everything in it wants doing something about.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub row_deciding_reads: Vec<ModelReads>,
+    /// What `models` says, grouped by cause and worded for whoever can act on
+    /// it, most urgent first (0040).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<crate::findings::Finding>,
     /// Only the models with something to say. A clean model is not news.
     pub models: Vec<ModelReport>,
 }
@@ -218,7 +222,7 @@ pub struct Totals {
     pub filter_unplaced: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct ModelReport {
     pub name: String,
     pub unique_id: String,
