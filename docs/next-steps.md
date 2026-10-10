@@ -7,16 +7,15 @@ fork's `collin-engine-2`. Not a decision: a list to come back to.
 
 ## Where the columns without an edge are
 
-Every compile parses. Of 114 897 columns, 111 426 have an edge, 97.0%. Against
+Every compile parses. Of 114 897 columns, 111 429 have an edge, 97.0%. Against
 the warehouse where a model has a table, 3499 of the 3507, and its YAML
-otherwise, columns with no parent to find aside, 111 313 of 111 318, 99.99%. The
-3471 without an edge, by cause:
+otherwise, columns with no parent to find aside, 111 316 of 111 317: every
+column but one. The 3468 without an edge, by cause:
 
 | Columns | Cause | Lever |
 | --- | --- | --- |
-| 3445 | Built from constants: literals, functions of literals, a date spine, a `VALUES` list (0016) | None: they have no parent, and the report counts them as roots |
+| 3446 | Built from constants: literals, functions of literals, a date spine, a `VALUES` list, a `LATERAL FLATTEN`'s index (0016) | None: they have no parent, and the report counts them as roots |
 | 21 | Three models that read only their own table: two audit tables written outside dbt, whose incremental compile is `select * from` itself `where 1 = 0` or close to it, and a date spine reading its last date | None in dbt: the report counts them apart and names the models (0039). The project can declare a table written outside dbt as a source |
-| 4 | A `LATERAL FLATTEN`'s `KEY` and `INDEX`: 1 over a column's JSON, 3 over an array the SQL builds from literals and columns | The engine: the key of a column's JSON comes from that column, as `VALUE` does (0028); an index, and keys written in the SQL, are roots |
 | 1 | A view older than its code: it has a column neither the code nor its source has | Rebuild the view |
 
 The report names every one, with where the walk back stopped. It does not say
@@ -53,9 +52,9 @@ audit table reading only itself, has no parsed edge.
 
 | | Edges |
 | --- | --- |
-| Read by both | 132 753 |
+| Read by both | 133 155 |
 | By collin alone | 30 |
-| By sqlglot alone | 1766 |
+| By sqlglot alone | 1364 |
 
 The disagreements sit in 10 models, and each was read in the SQL.
 
@@ -64,25 +63,24 @@ The disagreements sit in 10 models, and each was read in the SQL.
   pairings, every one wrong. 7 sit under a top level select in parentheses the
   comparison did not read, and 3 pass through a recursive CTE, which sqlglot
   does not follow.
-- **sqlglot alone and wrong, 1758.** The 134 pairings, and 1624 in two models
+- **sqlglot alone and wrong, 1358.** The 134 pairings, and 1224 in two models
   that build an array of objects out of a hundred columns and `LATERAL FLATTEN`
-  it: sqlglot credits each element's index and key to every one of those
-  columns, where the index is a position and the keys are literals in the SQL.
+  it: sqlglot credits each element's index to every one of those columns,
+  where the index is a position. Both read the element's key from them.
 - **collin wrong, 3.** A window's partition key written `cte.k`, credited to
   the other side of the join, which has a `k` too. 0031 reads a window's keys
   against the scope the edge comes from, and does not read the qualifier: it
   rejected binding one by reading the `FROM` clauses.
-- **collin missing, 5.** Two window `ORDER BY` keys qualified with the other
-  relation of a join, dropped for the same reason. Two columns built from a
-  `LATERAL FLATTEN`'s `KEY` over a column's parsed JSON, which the engine
-  derives from nothing, where it derives `VALUE` and `THIS` from the input
-  (0028). One `ARRAY_AGG ... WITHIN GROUP (ORDER BY c)`, where collin does not
-  count `c` as an input of the array its order shapes.
+- **collin missing, 3.** Two window `ORDER BY` keys qualified with the other
+  relation of a join, dropped for the same reason. One `ARRAY_AGG ... WITHIN
+  GROUP (ORDER BY c)`, where collin does not count `c` as an input of the array
+  its order shapes.
 
-Eight edges in 132 783, then, as far as the SQL shows. An independent reader
+Six edges in 133 185, then, as far as the SQL shows. An independent reader
 backs the roots too: following each through its CTEs, 3424 of the 3441 then
-counted end at no table. Of the other 17, 15 reach an incremental model's own table (0012),
-one is a literal the check misread, and one is the `FLATTEN` key above.
+counted end at no table. Of the other 17, 15 reach an incremental model's own
+table (0012), one is a literal the check misread, and one, a `CASE` on a
+`FLATTEN`'s key, has had an edge since the engine's eighth patch (0028).
 
 ## On public projects
 
@@ -126,7 +124,5 @@ Since the engine's seventh patch (0028) they are read: 1303 parsed edges,
   `partition by b.k` in a join of `a` and `b` that both have `k` credits `a.k`
   when the windowed column comes from `a`, and an `order by b.x` is dropped: 3
   edges wrong and 2 missing here.
-- **`LATERAL FLATTEN`'s `KEY`, `PATH` and `INDEX`** derive from nothing in the
-  engine. Over a column's JSON the key comes from that column: 2 edges missing
-  here. Over an array the SQL builds, the index is a position and the keys are
-  literals, which is a root, not the lost column it shows as: 3 columns here.
+- **An `ARRAY_AGG ... WITHIN GROUP (ORDER BY c)`** does not count `c` as an
+  input of the array its order shapes: 1 edge here.
