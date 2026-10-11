@@ -82,6 +82,45 @@ diff -r /tmp/collin/before/dump $O/dump                     # what the engine sa
 - **Comments say why, not what.**
 - **No em dash** in code, comments or documentation.
 
+## The engine fork
+
+The engine is [IL-William/flowscope](https://github.com/IL-William/flowscope),
+pinned by `rev` in `Cargo.toml` (0028).
+
+- **Two branches carry every fix.** `collin` holds one commit per fix on
+  upstream 0.9.0. `master` holds the same fixes, squash merged on upstream
+  0.9.2, and is what collin pins. A fix lands on both. The commit on `master`
+  is tagged `collin-engine-N`, and the pin moves to it in a pull request of
+  its own, measured as above.
+- **Measure a fix through collin before it lands** with a local
+  `[patch."https://github.com/IL-William/flowscope"]` pointing at a checkout
+  of a `master` based branch. The crate's version must match, or cargo
+  ignores the patch with a warning. Never commit it (0028).
+- **The fork is formatted with rustfmt; collin is not.** Never run `cargo fmt`
+  here: it would rewrite the whole tree.
+- **Nothing goes upstream** without the owner's say.
+
+## lineage-library
+
+`fixtures/lineage-library` is a submodule: its invented projects carry their
+lineage written by hand (0042), and `fixtures/lineage-library.known.txt` marks
+what collin is known to give otherwise.
+
+- **A limit found, or a shape added**, goes in three pull requests, in order:
+  one to lineage-library, writing the shape and its lineage from the SQL,
+  `check.py` passing; one here, moving the submodule and marking what collin
+  gives otherwise; then the fix, which fails the test until it drops the
+  marks.
+- **Never edit `expected.txt` to match collin.** When the two disagree, read
+  the SQL: either collin or the file is wrong.
+
+## Measuring precision
+
+[`tools/`](tools/README.md) holds what the figures in `docs/next-steps.md` were
+measured with: the comparison with sqlglot, the classifiers of the columns
+without an edge, and the blind audit. They read a pinned copy and its dump, and
+what they write names the project's models, so it stays outside this tree.
+
 ## Decisions
 
 [`docs/decisions/`](docs/decisions/README.md) records why collin is shaped this

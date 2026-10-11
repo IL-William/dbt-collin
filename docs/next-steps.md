@@ -5,6 +5,41 @@ collin 0.6.0, the engine at the fork's `collin-engine-4`, on a pinned copy of a
 3507 model Snowflake project, its manifest and its catalog generated on one
 target with that target's environment. Not a decision: a list to come back to.
 
+## What to do next
+
+In order. Each item says what holds it, where it starts and what shows it
+done, so that whoever picks it up needs nothing but this tree.
+
+1. **A column read beside an alias of the same name.** In `country_code as
+   country, country as country_name`, collin credits the alias where the SQL
+   reads the table's column: one edge in Shopify. It waits on Snowflake's
+   rule, which its documentation states only for `GROUP BY`, where the
+   column wins. Run `select a as b, b as c from (select 1 as a, 2 as b)` on
+   Snowflake: `c = 2` means the column wins in the select list too. Then, in
+   order: the shape in lineage-library, written to that rule; its mark in
+   `fixtures/lineage-library.known.txt`; the fix, which drops the mark. Done
+   when the mark is gone and the Snowflake project's cache moves only where
+   the SQL says it should.
+2. **Release 0.7.0**, once it is worth installing (0034). Since 0.6.0 a
+   star's `REPLACE` and `ILIKE` are read, which moves no edge of the three
+   projects measured here. Best released with the first item.
+3. **A `PIVOT`'s value columns**, a patch to the engine's fork (0028).
+   lineage-library marks it; no model of the Snowflake project uses one,
+   eight of Cal-ITP do.
+4. **Upstreaming the fork's ten patches** to pondpilot/flowscope, so that the
+   pin can go back to a crates.io release (0028). The owner's decision:
+   nothing is proposed upstream without it.
+5. **More shapes in lineage-library**: a recursive CTE, a `UNION BY NAME`, a
+   scalar subquery in a select list, a `MERGE`. Each is written from the SQL
+   before collin is run on it.
+6. **A third witness, optionally**: Snowflake's `ACCESS_HISTORY`, read outside
+   collin, which never reaches a warehouse (0001).
+7. **On hold: BigQuery**, not a priority for now. Its gaps are the engine's
+   STRUCT fields, `UNNEST` and `PIVOT` (On public projects, below).
+
+The precision, coverage and audit figures below were measured with the
+scripts in [`tools/`](../tools/README.md).
+
 ## Where the columns without an edge are
 
 Every compile parses. Of 114 897 columns, 111 429 have an edge, 97.0%. Against
