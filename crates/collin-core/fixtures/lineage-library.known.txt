@@ -1,0 +1,12 @@
+# What collin is known to give otherwise than lineage-library says, one line
+# of its expected.txt a mark:
+#
+#   project: missing: line    in expected.txt, and collin does not give it
+#   project: extra: line      given by collin, and not in expected.txt
+#
+# A mark that stops holding fails the test, so that a fix removes it. Each
+# names its limit above it.
+
+# The engine pairs the branches of a UNION by name, where SQL pairs them by
+# position: the second branch's `m.joined_at` is lost for `happened_at`.
+library: missing: branch_activity.happened_at <- members.joined_at rename

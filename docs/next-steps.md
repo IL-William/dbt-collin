@@ -121,6 +121,11 @@ Since the engine's seventh patch (0028) they are read: 1303 parsed edges,
 
 ## Residuals already named
 
+- **A `UNION` whose branches name a column differently** is paired by name,
+  where SQL pairs it by position: the second branch's column is lost for the
+  first's name, and at the top level becomes an output of its own. Found by
+  lineage-library (0042), and marked; none on the Snowflake project. The fix
+  is the engine's: a ninth patch to the fork (0028).
 - **A column read beside an alias of the same name** is credited to the alias:
   in `country_code as country, country as country_name`, the SQL reads the
   table's `country`. One edge in Shopify.

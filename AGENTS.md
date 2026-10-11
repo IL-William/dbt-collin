@@ -6,6 +6,7 @@ cache. It reads a project, it never runs dbt and never reaches a warehouse.
 ## Verify
 
 ```
+git submodule update --init      # once: fixtures/lineage-library
 cargo test
 ```
 
@@ -72,7 +73,12 @@ diff -r /tmp/collin/before/dump $O/dump                     # what the engine sa
 - **The cache stays at version 1.** dbt-lens refuses anything higher, so a
   released binary must keep reading what this writes.
 - **No real project SQL in this repository.** Fixtures are invented, or public
-  under a license that allows copying them here (0038).
+  under a license that allows copying them here (0038). An invented one looks
+  like no client's project either: its own domain, its own names.
+- **lineage-library's lineage is written by hand** (0042). When its test
+  fails, read the SQL: either collin or its `expected.txt` is wrong. A fix to
+  collin may drop a mark in `fixtures/lineage-library.known.txt`; a fix to the
+  lineage is a pull request to lineage-library, and nothing regenerates it.
 - **Comments say why, not what.**
 - **No em dash** in code, comments or documentation.
 
