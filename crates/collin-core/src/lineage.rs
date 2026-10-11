@@ -3229,6 +3229,146 @@ mod tests {
         gives_the_caches_committed_beside_it("jaffle_shop");
     }
 
+    /// The invented projects of lineage-library, whose lineage is written by
+    /// hand from the SQL: what is right, where the public fixtures record what
+    /// collin gave (0042). Nothing here regenerates it. What collin is known
+    /// to give otherwise is marked in `lineage-library.known.txt`, so that a
+    /// limit stays in view and its fix shows.
+    #[test]
+    fn lineage_library_gives_the_lineage_written_by_hand() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+        let root = fixtures.join("lineage-library");
+        assert!(
+            root.join("README.md").exists(),
+            "fixtures/lineage-library is empty: `git submodule update --init` fetches it"
+        );
+        let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+
+        // `project: missing: line` or `project: extra: line`.
+        let mut marks: HashMap<String, (Vec<String>, Vec<String>)> = HashMap::new();
+        for line in read(&fixtures.join("lineage-library.known.txt")).lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (project, rest) = line.split_once(": ").expect("project: mark: line");
+            let entry = marks.entry(project.to_string()).or_default();
+            match rest.split_once(": ") {
+                Some(("missing", l)) => entry.0.push(l.to_string()),
+                Some(("extra", l)) => entry.1.push(l.to_string()),
+                _ => panic!("lineage-library.known.txt: not a mark: {line}"),
+            }
+        }
+
+        let mut projects: Vec<PathBuf> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.join("project.json").exists())
+            .collect();
+        projects.sort();
+        assert!(!projects.is_empty(), "lineage-library holds no project");
+        let mut faults: Vec<String> = Vec::new();
+        for dir in &projects {
+            let name = dir.file_name().unwrap().to_string_lossy().to_string();
+            let (missing, extra) = marks.remove(&name).unwrap_or_default();
+            let got = lineage_library_reading(dir);
+            let mut want: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for line in read(&dir.join("expected.txt")).lines().map(str::trim) {
+                if !line.is_empty() && !line.starts_with('#') {
+                    want.insert(line.to_string());
+                }
+            }
+            for l in &missing {
+                assert!(want.remove(l), "{name}: missing: {l} is not a line of expected.txt");
+            }
+            want.extend(extra.iter().cloned());
+            let tag = |what: &str, l: &String| format!("{name}: {what}  {l}");
+            faults.extend(want.difference(&got).map(|l| tag("expected, not given:", l)));
+            faults.extend(got.difference(&want).map(|l| tag("given, not expected:", l)));
+            for l in missing.iter().filter(|l| got.contains(*l)) {
+                faults.push(tag("now given, drop the mark:  missing:", l));
+            }
+        }
+        for project in marks.keys() {
+            faults.push(format!("lineage-library.known.txt marks {project}, which lineage-library lacks"));
+        }
+        assert!(
+            faults.is_empty(),
+            "lineage-library and the pass disagree. Read the SQL before either:\n{}",
+            faults.join("\n")
+        );
+    }
+
+    /// One project of lineage-library, run through the pass, in the lines of
+    /// its `expected.txt`.
+    fn lineage_library_reading(dir: &Path) -> std::collections::BTreeSet<String> {
+        let read = |p: PathBuf| std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        let spec: serde_json::Value = serde_json::from_str(&read(dir.join("project.json"))).unwrap();
+        // Sorted, as the catalog reader hands them over.
+        let names = |v: &serde_json::Value| -> Vec<String> {
+            let mut out: Vec<String> =
+                v.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect();
+            out.sort();
+            out
+        };
+        let uid_of = |name: &str| match spec["sources"].get(name) {
+            Some(_) => format!("source.lib.{name}"),
+            None => format!("model.lib.{name}"),
+        };
+
+        let mut nodes = Vec::new();
+        let mut warehouse: HashMap<String, Vec<String>> = HashMap::new();
+        for (name, s) in spec["sources"].as_object().unwrap() {
+            let uid = uid_of(name);
+            let mut n = node(&uid, s["relation"].as_str().unwrap(), &[], &[]);
+            n.1.kind = "source".into();
+            nodes.push(n);
+            warehouse.insert(uid, names(&s["columns"]));
+        }
+        for (name, m) in spec["models"].as_object().unwrap() {
+            let uid = uid_of(name);
+            let parents: Vec<String> = names(&m["parents"]).iter().map(|p| uid_of(p)).collect();
+            let parents: Vec<&str> = parents.iter().map(String::as_str).collect();
+            // An ephemeral model has no table, and so no witness.
+            let relation = m["relation"].as_str();
+            let mut n = node(&uid, relation.unwrap_or_default(), &parents, &[]);
+            n.1.name = name.clone();
+            n.1.materialized = m["materialized"].as_str().unwrap().into();
+            n.1.sql = read(dir.join("models").join(format!("{name}.sql")));
+            nodes.push(n);
+            if relation.is_some() {
+                warehouse.insert(uid, names(&m["columns"]));
+            }
+        }
+        let mut project = project_of(nodes);
+        project.adapter = spec["adapter"].as_str().unwrap().into();
+
+        let short = |uid: &str| uid.trim_start_matches("model.lib.").trim_start_matches("source.lib.").to_string();
+        let mut got: Vec<String> = Vec::new();
+        run_observed(&project, warehouse, &opts(true, false), |seen| {
+            let model = short(&seen.model.uid);
+            if seen.plan != Plan::Parsed {
+                got.push(format!("{model} plan {:?}", seen.plan));
+            }
+            for e in seen.published {
+                let (to, from) = (short(&e.to), short(&e.from));
+                got.push(format!("{to}.{} <- {from}.{} {}", e.to_col, e.from_col, e.kind));
+            }
+            for column in &seen.resolved.roots {
+                got.push(format!("{model}.{column} root"));
+            }
+            for lost in &seen.resolved.lost {
+                got.push(format!("{model}.{} lost", lost.column));
+            }
+            let own = norm_relation(&seen.model.relation);
+            for r in seen.resolved.indirect.iter().filter(|r| r.relation != own) {
+                let parent = project.by_relation.get(&r.relation).map(|u| short(u));
+                let parent = parent.unwrap_or(r.relation.clone());
+                got.push(format!("{model} reads {parent}.{} {}", r.column, r.role.as_str()));
+            }
+        });
+        got.into_iter().collect()
+    }
+
     /// Fivetran's Shopify package: SQL written for production, ephemeral models
     /// inlined as CTEs, and staging models whose columns the package fills from
     /// what each source turns out to have.
