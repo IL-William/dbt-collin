@@ -16,9 +16,3 @@ library: missing: member_branch_loans.south_loans <- loans_enriched.branch_code 
 library: missing: member_branch_loans.east_loans <- loans_enriched.loan_id aggregate
 library: missing: member_branch_loans.east_loans <- loans_enriched.branch_code aggregate
 library: extra: member_branch_loans plan PerColumn
-
-# A name in a select list that is both a column of its FROM and an alias given
-# before it is read as the alias, where Snowflake and DuckDB read the column:
-# the engine adds the alias's inputs to the column's.
-library: extra: catalogue_entries.bare_title <- books.author rename
-library: extra: catalogue_entries.title_key <- books.author transform

@@ -77,8 +77,8 @@ committed.
 **Shopify:** 240 models, 211 of them tables or views confirmed by the catalog
 and 29 ephemeral. 4875 edges when committed, 630 of them inferred in 16 marts
 0018 set aside; since the engine's seventh patch (0028), 5548 parsed edges and
-none inferred, of which sqlglot reads 5547 the same way. The expected caches
-hold the one edge sqlglot disputes, which its README names. Its staging models are written
+none inferred, of which sqlglot read 5547 the same way, and all 5548 since
+the eleventh, which read a column beside an alias of its name. Its staging models are written
 by a macro from what each source turns out to have: the same introspection as
 a real project's, which is why its `profiles.yml` puts the seeds in the schema
 the sources read.

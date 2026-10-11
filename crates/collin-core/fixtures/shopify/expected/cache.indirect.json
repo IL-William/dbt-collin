@@ -32895,7 +32895,7 @@
 {"from":"model.shopify.stg_shopify_gql__location_tmp","from_col":"city","to":"model.shopify.stg_shopify_gql__location","to_col":"city","kind":"passthrough"},
 {"from":"model.shopify.stg_shopify_gql__location_tmp","from_col":"country_code","to":"model.shopify.stg_shopify_gql__location","to_col":"country","kind":"rename"},
 {"from":"model.shopify.stg_shopify_gql__location_tmp","from_col":"country_code","to":"model.shopify.stg_shopify_gql__location","to_col":"country_code","kind":"passthrough"},
-{"from":"model.shopify.stg_shopify_gql__location_tmp","from_col":"country_code","to":"model.shopify.stg_shopify_gql__location","to_col":"country_name","kind":"rename"},
+{"from":"model.shopify.stg_shopify_gql__location_tmp","from_col":"country","to":"model.shopify.stg_shopify_gql__location","to_col":"country_name","kind":"rename"},
 {"from":"model.shopify.stg_shopify_gql__location_tmp","from_col":"created_at","to":"model.shopify.stg_shopify_gql__location","to_col":"created_at","kind":"transform"},
 {"from":"model.shopify.stg_shopify_gql__location_tmp","from_col":"is_active","to":"model.shopify.stg_shopify_gql__location","to_col":"is_active","kind":"passthrough"},
 {"from":"model.shopify.stg_shopify_gql__location_tmp","from_col":"_fivetran_deleted","to":"model.shopify.stg_shopify_gql__location","to_col":"is_deleted","kind":"rename"},
