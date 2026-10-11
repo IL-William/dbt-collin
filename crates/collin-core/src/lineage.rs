@@ -309,7 +309,7 @@ pub fn run_observed(
             rep.totals.parse_failed += 1;
         } else {
             rep.totals.parsed += 1;
-            store.set_computed(&model.uid, resolved.outputs.clone());
+            store.set_computed(&model.uid, resolved.projection.clone());
         }
 
         let agreement = store.agreement(&model.uid);
@@ -3338,10 +3338,12 @@ mod tests {
     fn lineage_library_reading(dir: &Path) -> std::collections::BTreeSet<String> {
         let read = |p: PathBuf| std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         let spec: serde_json::Value = serde_json::from_str(&read(dir.join("project.json"))).unwrap();
-        // Sorted, as the catalog reader hands them over.
+        // Columns in their table's order, as the catalog reader hands them over.
+        let columns = |v: &serde_json::Value| -> Vec<String> {
+            v.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect()
+        };
         let names = |v: &serde_json::Value| -> Vec<String> {
-            let mut out: Vec<String> =
-                v.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect();
+            let mut out = columns(v);
             out.sort();
             out
         };
@@ -3357,7 +3359,7 @@ mod tests {
             let mut n = node(&uid, s["relation"].as_str().unwrap(), &[], &[]);
             n.1.kind = "source".into();
             nodes.push(n);
-            warehouse.insert(uid, names(&s["columns"]));
+            warehouse.insert(uid, columns(&s["columns"]));
         }
         for (name, m) in spec["models"].as_object().unwrap() {
             let uid = uid_of(name);
@@ -3371,7 +3373,7 @@ mod tests {
             n.1.sql = read(dir.join("models").join(format!("{name}.sql")));
             nodes.push(n);
             if relation.is_some() {
-                warehouse.insert(uid, names(&m["columns"]));
+                warehouse.insert(uid, columns(&m["columns"]));
             }
         }
         let mut project = project_of(nodes);

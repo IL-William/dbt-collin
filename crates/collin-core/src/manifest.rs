@@ -50,8 +50,9 @@ pub struct RawNode {
     /// `sql` or `python`. Absent before dbt 1.3, which had only SQL models.
     #[serde(default)]
     pub language: Option<String>,
-    #[serde(default)]
-    pub columns: HashMap<String, RawColumn>,
+    /// In the order the YAML writes them, which dbt keeps.
+    #[serde(default, deserialize_with = "in_order")]
+    pub columns: Vec<RawColumn>,
     #[serde(default)]
     pub depends_on: RawDependsOn,
     #[serde(default)]
@@ -62,6 +63,30 @@ pub struct RawNode {
 pub struct RawColumn {
     #[serde(default)]
     pub name: String,
+}
+
+/// A JSON object's values in the order it writes them, which a map would lose.
+/// A star over a parent known only by its YAML expands to this order: the
+/// project's word on where each column sits, as on which columns there are.
+fn in_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<RawColumn>, D::Error> {
+    struct Entries;
+    impl<'de> serde::de::Visitor<'de> for Entries {
+        type Value = Vec<RawColumn>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("an object of columns")
+        }
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while let Some((_, column)) = map.next_entry::<serde::de::IgnoredAny, RawColumn>()? {
+                out.push(column);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_any(Entries)
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -97,7 +122,7 @@ pub struct Node {
     pub language: String,
     pub sql: String,
     pub sql_source: SqlSource,
-    /// Column names as declared in YAML, lower case.
+    /// Column names as declared in YAML, lower case, in the YAML's order.
     pub declared: Vec<String>,
     pub parents: Vec<String>,
 }
@@ -222,10 +247,13 @@ impl Project {
             if !relation.is_empty() {
                 claims.entry(norm_relation(&relation)).or_default().push(uid.clone());
             }
-            let mut declared: Vec<String> =
-                n.columns.values().map(|c| c.name.to_lowercase()).filter(|s| !s.is_empty()).collect();
-            declared.sort();
-            declared.dedup();
+            let mut seen = std::collections::HashSet::new();
+            let declared: Vec<String> = n
+                .columns
+                .iter()
+                .map(|c| c.name.to_lowercase())
+                .filter(|s| !s.is_empty() && seen.insert(s.clone()))
+                .collect();
             nodes.insert(
                 uid.clone(),
                 Node {
@@ -326,6 +354,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_yaml_s_columns_keep_the_order_it_writes_them_in() {
+        // A star over a parent known only by its YAML expands to this order.
+        let node = |columns: &str| -> RawNode {
+            serde_json::from_str(&format!(r#"{{"name": "m", "resource_type": "model", "columns": {columns}}}"#))
+                .unwrap()
+        };
+        let names = |n: RawNode| n.columns.into_iter().map(|c| c.name).collect::<Vec<_>>();
+        assert_eq!(names(node(r#"{"zeta": {"name": "zeta"}, "alpha": {"name": "alpha"}}"#)), vec!["zeta", "alpha"]);
+        assert!(names(node("null")).is_empty());
+    }
+
+    #[test]
     fn relation_names_normalise_to_one_shape() {
         assert_eq!(norm_relation("db.sch.tbl"), "DB.SCH.TBL");
         assert_eq!(norm_relation("\"DB\".\"sch\".\"Tbl\""), "DB.SCH.TBL");
@@ -377,7 +417,7 @@ mod tests {
                     relation_name: Some("\"DB\".\"sch\".\"tbl\"".into()),
                     compiled_code: None,
                     language: None,
-                    columns: HashMap::new(),
+                    columns: Vec::new(),
                     depends_on: RawDependsOn::default(),
                     config: RawConfig::default(),
                 },

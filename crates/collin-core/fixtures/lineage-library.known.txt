@@ -16,23 +16,3 @@ library: missing: member_branch_loans.south_loans <- loans_enriched.branch_code 
 library: missing: member_branch_loans.east_loans <- loans_enriched.loan_id aggregate
 library: missing: member_branch_loans.east_loans <- loans_enriched.branch_code aggregate
 library: extra: member_branch_loans plan PerColumn
-
-# A star expands in alphabetical order: every column list is sorted, the
-# catalog's among them, which drops each column's index. A UNION pairs its
-# branches by position, so a star over a table whose columns come in another
-# order is paired by name, and a branch written out against a star is paired
-# with the wrong names.
-library: missing: all_loans.loan_id <- raw.interlibrary_loans.request_id rename
-library: missing: all_loans.book_id <- raw.interlibrary_loans.title_id rename
-library: missing: all_loans.member_id <- raw.interlibrary_loans.patron_id rename
-library: missing: all_loans.borrowed_at <- raw.interlibrary_loans.requested_at rename
-library: missing: all_loans.due_on <- raw.loans_archive.returned_at rename
-library: missing: all_loans.due_on <- raw.interlibrary_loans.due_back_on rename
-library: missing: all_loans.returned_at <- raw.loans_archive.due_on rename
-library: extra: all_loans.loan_id <- raw.interlibrary_loans.requested_at rename
-library: extra: all_loans.book_id <- raw.interlibrary_loans.request_id rename
-library: extra: all_loans.member_id <- raw.interlibrary_loans.due_back_on rename
-library: extra: all_loans.branch_code <- raw.interlibrary_loans.patron_id rename
-library: extra: all_loans.borrowed_at <- raw.interlibrary_loans.title_id rename
-library: extra: all_loans.due_on <- raw.loans_archive.due_on passthrough
-library: extra: all_loans.returned_at <- raw.loans_archive.returned_at passthrough

@@ -8,8 +8,13 @@
 //! (warehouse disagrees with declared) from a degraded compile (computed
 //! disagrees with warehouse). Collapsing them into one "best guess" would hide
 //! exactly the two failures worth reporting.
+//!
+//! Invariant: each list is kept twice. Sorted, it is a set: every comparison
+//! and every list the report and the cache derive from it read it so. In its
+//! source's order, it is what the engine is handed, because a `select *`
+//! expands to that order and a `UNION` pairs its branches by position (0044).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Provenance {
@@ -54,22 +59,47 @@ impl Agreement {
     }
 }
 
+/// One node's columns from one source, as a set and in the source's order.
+#[derive(Default)]
+struct Listed {
+    sorted: Vec<String>,
+    ordered: Vec<String>,
+}
+
+impl Listed {
+    fn new(cols: Vec<String>) -> Listed {
+        let mut seen = HashSet::new();
+        let ordered: Vec<String> = cols.into_iter().filter(|c| seen.insert(c.clone())).collect();
+        let mut sorted = ordered.clone();
+        sorted.sort();
+        Listed { sorted, ordered }
+    }
+}
+
+fn listed(lists: HashMap<String, Vec<String>>) -> HashMap<String, Listed> {
+    lists.into_iter().map(|(uid, cols)| (uid, Listed::new(cols))).collect()
+}
+
+fn ordered<'s>(lists: &'s HashMap<String, Listed>, uid: &str) -> Option<&'s [String]> {
+    lists.get(uid).map(|l| l.ordered.as_slice()).filter(|v| !v.is_empty())
+}
+
 #[derive(Default)]
 pub struct Store {
-    declared: HashMap<String, Vec<String>>,
-    warehouse: HashMap<String, Vec<String>>,
-    computed: HashMap<String, Vec<String>>,
+    declared: HashMap<String, Listed>,
+    warehouse: HashMap<String, Listed>,
+    computed: HashMap<String, Listed>,
 }
 
 impl Store {
+    /// Each list in its source's order: the YAML's, the table's.
     pub fn new(declared: HashMap<String, Vec<String>>, warehouse: HashMap<String, Vec<String>>) -> Store {
-        Store { declared, warehouse, computed: HashMap::new() }
+        Store { declared: listed(declared), warehouse: listed(warehouse), computed: HashMap::new() }
     }
 
-    pub fn set_computed(&mut self, uid: &str, mut cols: Vec<String>) {
-        cols.sort();
-        cols.dedup();
-        self.computed.insert(uid.to_string(), cols);
+    /// `cols` in the order the compile projects them.
+    pub fn set_computed(&mut self, uid: &str, cols: Vec<String>) {
+        self.computed.insert(uid.to_string(), Listed::new(cols));
     }
 
     /// Drop a computed list the pass has decided not to trust.
@@ -82,29 +112,31 @@ impl Store {
         self.computed.remove(uid);
     }
 
+    /// Sorted, as are the next two.
     pub fn declared(&self, uid: &str) -> Option<&Vec<String>> {
-        self.declared.get(uid).filter(|v| !v.is_empty())
+        self.declared.get(uid).map(|l| &l.sorted).filter(|v| !v.is_empty())
     }
     pub fn warehouse(&self, uid: &str) -> Option<&Vec<String>> {
-        self.warehouse.get(uid).filter(|v| !v.is_empty())
+        self.warehouse.get(uid).map(|l| &l.sorted).filter(|v| !v.is_empty())
     }
     pub fn computed(&self, uid: &str) -> Option<&Vec<String>> {
-        self.computed.get(uid).filter(|v| !v.is_empty())
+        self.computed.get(uid).map(|l| &l.sorted).filter(|v| !v.is_empty())
     }
 
-    /// The columns to hand the engine when a downstream model reads this node.
+    /// The columns to hand the engine when a downstream model reads this node,
+    /// in their source's order.
     ///
     /// The warehouse wins: downstream SQL was compiled against the objects that
     /// actually exist, so a `select *` there sees the warehouse columns, not
     /// whatever this compile would have produced.
     pub fn visible(&self, uid: &str) -> (&[String], Provenance) {
-        if let Some(c) = self.warehouse(uid) {
+        if let Some(c) = ordered(&self.warehouse, uid) {
             return (c, Provenance::Warehouse);
         }
-        if let Some(c) = self.computed(uid) {
+        if let Some(c) = ordered(&self.computed, uid) {
             return (c, Provenance::Computed);
         }
-        if let Some(c) = self.declared(uid) {
+        if let Some(c) = ordered(&self.declared, uid) {
             return (c, Provenance::Declared);
         }
         (&[], Provenance::Unknown)
@@ -171,6 +203,23 @@ mod tests {
         let (c, p) = s.visible("m");
         assert_eq!(c, cols(&["a", "b"]).as_slice());
         assert_eq!(p, Provenance::Warehouse);
+    }
+
+    #[test]
+    fn the_engine_is_handed_each_list_in_its_source_s_order() {
+        // A star expands to it, and a union pairs by it. Compared, the lists
+        // are sets.
+        let mut s = Store::new(
+            HashMap::from([("y".into(), cols(&["z", "a"])), ("w".into(), cols(&["b", "a"]))]),
+            HashMap::from([("w".into(), cols(&["z", "b", "a"]))]),
+        );
+        s.set_computed("c", cols(&["q", "p", "q"]));
+        assert_eq!(s.visible("w").0, cols(&["z", "b", "a"]).as_slice());
+        assert_eq!(s.visible("c").0, cols(&["q", "p"]).as_slice());
+        assert_eq!(s.visible("y").0, cols(&["z", "a"]).as_slice());
+        assert_eq!(s.warehouse("w").unwrap(), &cols(&["a", "b", "z"]));
+        s.set_computed("w", cols(&["a", "z", "b"]));
+        assert_eq!(s.agreement("w"), Agreement::Confirmed);
     }
 
     #[test]

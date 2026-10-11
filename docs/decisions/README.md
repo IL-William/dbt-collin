@@ -49,6 +49,7 @@ is built this way, for whoever changes it next.
 | [0041](0041-a-window-key-is-read-in-its-own-select.md) | A window key is read in its own SELECT | changing where the keys of a window, a `WITHIN GROUP` or an `ORDER BY` inside a call are read, or which source such a key is credited to |
 | [0042](0042-an-invented-project-carries-its-lineage-by-hand.md) | An invented project carries its lineage by hand | changing what the lineage-library test compares, marking a line in `fixtures/lineage-library.known.txt`, moving the submodule, or deciding what a regression test of the whole pass compares against |
 | [0043](0043-a-source-without-columns-is-the-catalog-s-finding.md) | A source without columns is the catalog's finding | changing what is said of a parent the engine was not told of, or proposing that collin read a warehouse's information schema |
+| [0044](0044-a-star-expands-in-its-table-s-order.md) | A star expands in its table's order | sorting a column list the engine is handed, comparing two column lists as lists, or reading the catalog, the YAML or a compile's outputs into the store |
 
 ## The other side of the boundary
 
