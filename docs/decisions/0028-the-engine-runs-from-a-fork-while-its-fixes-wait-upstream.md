@@ -53,6 +53,8 @@ The patches, in the order they are pinned:
 9. The branches of a `UNION`, an `INTERSECT` or an `EXCEPT` pair by position,
    as SQL pairs them, unless it says `BY NAME`: a later branch's columns take
    the first branch's names.
+10. A wildcard's REPLACE puts the replacing expression in the column's place,
+    and its ILIKE keeps the columns whose name the pattern matches.
 
 When upstream releases a patch, the fork rebases onto that release and drops
 it. When it has released them all, the pin goes back to a crates.io version and
@@ -139,3 +141,9 @@ Cal-ITP three models stop being contradicted by the warehouse and are parsed,
 their unions of stars no longer adding twelve columns no table has, and four
 edges and three filter reads arrive. Shopify and Jaffle Shop do not move, and
 lineage-library's one mark goes.
+
+Moved to the tenth, tagged `collin-engine-5`, for two limits lineage-library
+marked: a star's REPLACE drew the replaced column as a copy of itself, and its
+ILIKE expanded every column until the warehouse settled them. Neither appears
+in the 3507 model Snowflake project, Cal-ITP or Shopify, whose caches do not
+move, `--indirect` included; lineage-library's three marks for them go.

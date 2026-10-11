@@ -7,15 +7,6 @@
 # A mark that stops holding fails the test, so that a fix removes it. Each
 # names its limit above it.
 
-# A star's REPLACE is not read: the star expands every column as it is, so
-# the replaced one is drawn as a copy of itself.
-library: missing: book_labels.title <- books.title transform
-library: extra: book_labels.title <- books.title passthrough
-
-# A star's ILIKE is not read: the star expands every column, the warehouse
-# contradicts the compile, and the columns both have are kept (0029).
-library: extra: loan_keys plan PerColumn
-
 # A PIVOT is read on a best effort by the engine: its value columns get no
 # lineage, and the warehouse contradicts the compile.
 library: missing: member_branch_loans.north_loans <- loans_enriched.loan_id aggregate

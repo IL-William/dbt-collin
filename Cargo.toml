@@ -13,7 +13,7 @@ license = "FSL-1.1-MIT"
 # is a patch upstream can take as it is, with its own test (0028). The commit
 # is tagged collin-engine-3 there, so that no rewrite of a branch can take it
 # away.
-flowscope-core = { git = "https://github.com/IL-William/flowscope", rev = "07a207391f7bf86151e6e8df8d01c93bd56112bb" }
+flowscope-core = { git = "https://github.com/IL-William/flowscope", rev = "8b8363122eaf50381354ec0c060d819a6831fc1d" }
 # The engine's own parser version, named here only to walk its syntax tree.
 sqlparser = { version = "0.61", features = ["visitor"] }
 serde = { version = "1", features = ["derive"] }

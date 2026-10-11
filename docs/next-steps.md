@@ -142,8 +142,10 @@ limit.
 - **An inferred column several parents could give** is settled by the compile,
   by every candidate, or by manifest order (0027). None here: one edge is
   inferred.
-- **`* REPLACE (...)` and `* ILIKE '...'`** are not read: the star expands to
-  every column. No model of the three projects above uses either.
+- **A `PIVOT`'s value columns** get no lineage: the engine reads a `PIVOT` on a
+  best effort. None in the Snowflake project, eight models of Cal-ITP;
+  lineage-library marks it. A star's `REPLACE` and `ILIKE`, which no model of
+  the three projects uses, are read since the engine's tenth patch (0028).
 - **A window key the syntax tree cannot bind**, in a named window, an
   unaliased derived table, or a bare name several sources have, is read as
   before 0041, against the source the engine hung the window off: 3 of the 29
