@@ -14,11 +14,10 @@ Only what collin reads is here, not the package:
 - `expected/` holds the caches collin gives for it, with and without
   `--indirect`, less `generated_at` and `producer`, one edge a line.
 
-They record what collin gives, which is not everything that is right. Of the
-5548 parsed edges, sqlglot reads 5547 the same way. The other is
-`country as country_name` beside `country_code as country`: the SQL reads the
-table's `country`, and collin credits the alias. A fix moves it, and the diff
-of `expected/` shows it.
+They record what collin gives, which is not everything that is right. sqlglot
+reads all 5548 parsed edges the same way, since the engine's eleventh patch
+read `country as country_name` beside `country_code as country` as the SQL
+does: the table's `country`, not the alias.
 
 `lineage::tests::shopify_gives_the_caches_committed_beside_it` fails when
 either cache moves. A change meant to move them is accepted with:

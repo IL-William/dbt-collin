@@ -147,3 +147,12 @@ marked: a star's REPLACE drew the replaced column as a copy of itself, and its
 ILIKE expanded every column until the warehouse settled them. Neither appears
 in the 3507 model Snowflake project, Cal-ITP or Shopify, whose caches do not
 move, `--indirect` included; lineage-library's three marks for them go.
+
+Moved to the eleventh, tagged `collin-engine-6`: a name in a select list that
+is both a column of its `FROM` and an alias given before it was read as the
+alias, where Snowflake and DuckDB read the column. Now a column a source is
+known to have wins, and the alias is read through only where no source is
+known to have its name. The 3507 model Snowflake project does not move, cache,
+`--indirect` and dumps. Shopify moves its one edge sqlglot disputed, Cal-ITP
+11 lines in 7 models, each read in the SQL and each now the column, and
+lineage-library's two marks for it go.
