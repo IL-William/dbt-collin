@@ -86,7 +86,10 @@ handed the column lists the engine was handed, names compared without case as
 collin compares them. 3506 of the 3507 models were compared; the other, an
 audit table reading only itself, has no parsed edge. Measured again on
 2026-10-11, once a window's keys were read in their own `SELECT` (0041); the
-engine's ninth patch moves nothing here.
+engine's ninth patch moves nothing here. Until 0044 both readers were handed
+each table's columns in alphabetical order, so a union pairing by position
+could not tell them apart. Handed in the table's order since then, sqlglot
+gives the same figures.
 
 | | Edges |
 | --- | --- |
