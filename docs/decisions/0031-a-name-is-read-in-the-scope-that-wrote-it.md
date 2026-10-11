@@ -44,3 +44,14 @@ to union branches that write null for the column. The 4 are keys a window reads
 through a CTE that renames them. The 5 are reads of names a union does not
 project, which the old reading had found in a branch's list and 0019 now
 bridges as inferred. Under `--indirect` the cache loses 35 edges and gains 3.
+
+## Amended on 2026-10-11
+
+The scope a window's column comes from is the source the engine hung the
+window off, which for a function taking no column is the first source of its
+`SELECT`, whatever the key's qualifier says. A window's keys, and those of a
+`WITHIN GROUP` or of an `ORDER BY` inside a call, are now read off the syntax
+tree in the `SELECT` that writes them, each bound by its qualifier there
+([0041](0041-a-window-key-is-read-in-its-own-select.md)). That is a reading of
+one `SELECT`'s `FROM`, not the statement wide map rejected above. This text
+reading is what is left where the tree cannot bind a key.

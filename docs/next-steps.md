@@ -48,15 +48,16 @@ Coverage says a column has an edge, not that the edge is right. Every parsed
 edge was compared with an independent reading of the same SQL by sqlglot,
 handed the column lists the engine was handed, names compared without case as
 collin compares them. 3506 of the 3507 models were compared; the other, an
-audit table reading only itself, has no parsed edge.
+audit table reading only itself, has no parsed edge. Measured again on
+2026-10-11, once a window's keys were read in their own `SELECT` (0041).
 
 | | Edges |
 | --- | --- |
-| Read by both | 133 155 |
-| By collin alone | 30 |
-| By sqlglot alone | 1364 |
+| Read by both | 133 161 |
+| By collin alone | 27 |
+| By sqlglot alone | 1358 |
 
-The disagreements sit in 10 models, and each was read in the SQL.
+The disagreements sit in 6 models, and each was read in the SQL.
 
 - **collin alone and right, 27.** 17 sit under `UNION ALL BY NAME`, which
   sqlglot pairs by position: its own 134 edges in that model are those
@@ -67,16 +68,13 @@ The disagreements sit in 10 models, and each was read in the SQL.
   that build an array of objects out of a hundred columns and `LATERAL FLATTEN`
   it: sqlglot credits each element's index to every one of those columns,
   where the index is a position. Both read the element's key from them.
-- **collin wrong, 3.** A window's partition key written `cte.k`, credited to
-  the other side of the join, which has a `k` too. 0031 reads a window's keys
-  against the scope the edge comes from, and does not read the qualifier: it
-  rejected binding one by reading the `FROM` clauses.
-- **collin missing, 3.** Two window `ORDER BY` keys qualified with the other
-  relation of a join, dropped for the same reason. One `ARRAY_AGG ... WITHIN
-  GROUP (ORDER BY c)`, where collin does not count `c` as an input of the array
-  its order shapes.
+- **collin wrong or missing, none.** Before 0041 there were 3 wrong and 6
+  missing, all keys the engine leaves unread: a window's partition key written
+  `cte.k`, credited to the other side of the join, which has a `k` too, and so
+  missing where it belongs; two window `ORDER BY` keys qualified with the
+  second source of a join; one `ARRAY_AGG ... WITHIN GROUP (ORDER BY c)`.
 
-Six edges in 133 185, then, as far as the SQL shows. An independent reader
+None in 133 188, then, as far as the SQL shows. An independent reader
 backs the roots too: following each through its CTEs, 3424 of the 3441 then
 counted end at no table. Of the other 17, 15 reach an incremental model's own
 table (0012), one is a literal the check misread, and one, a `CASE` on a
@@ -120,9 +118,7 @@ Since the engine's seventh patch (0028) they are read: 1303 parsed edges,
   inferred.
 - **`* REPLACE (...)` and `* ILIKE '...'`** are not read: the star expands to
   every column.
-- **A qualified window key** is read against the scope its edge comes from, so
-  `partition by b.k` in a join of `a` and `b` that both have `k` credits `a.k`
-  when the windowed column comes from `a`, and an `order by b.x` is dropped: 3
-  edges wrong and 2 missing here.
-- **An `ARRAY_AGG ... WITHIN GROUP (ORDER BY c)`** does not count `c` as an
-  input of the array its order shapes: 1 edge here.
+- **A window key the syntax tree cannot bind**, in a named window, an
+  unaliased derived table, or a bare name several sources have, is read as
+  before 0041, against the source the engine hung the window off: 3 of the 29
+  window and ordered aggregate expressions here, none of them wrong.

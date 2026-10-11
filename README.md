@@ -126,14 +126,14 @@ target with that target's environment, about 8 seconds end to end:
 | | |
 | --- | --- |
 | Models parsed | 3507 / 3507 |
-| Edges | 133 357: 133 356 parsed, 1 inferred |
+| Edges | 133 360: 133 359 parsed, 1 inferred |
 | Columns covered | 97.0%, and against a list this tool did not produce every column but one: 111 316 of 111 317 |
 | Columns emitted that the warehouse does not have | 0 |
 | Confirmed against the warehouse | 3496 of the 3499 models `catalog.json` covers |
 | Contradicted by it and settled column by column | 2 |
 | Output columns of trusted models with no edge, named | 0 |
-| Columns read to choose rows | 7674, 2804 never projected, in the report unless `--indirect` |
-| Parsed edges an independent reading of the SQL shows wrong | 3 of 133 185, and 3 missing |
+| Columns read to choose rows | 7674, 2805 never projected, in the report unless `--indirect` |
+| Parsed edges an independent reading of the SQL shows wrong | 0 of 133 188, and none missing |
 
 Coverage is quoted twice on purpose. For a model with no `catalog.json` entry,
 8 of the 3507 here, the usual figure measures the compile against its own
