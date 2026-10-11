@@ -228,6 +228,11 @@ lists propagate from the leaves instead of needing a warehouse.
   best effort, and the warehouse then contradicts the compile. lineage-library
   carries this limit as marked lines
   ([0042](docs/decisions/0042-an-invented-project-carries-its-lineage-by-hand.md)).
+- **A name both a column and an alias given before it** in one select list,
+  as in `country_code as country, country as country_name`, is read as the
+  alias, where Snowflake and DuckDB read the column: the engine credits the
+  alias's inputs. lineage-library carries this limit as marked lines, and
+  the Shopify fixture has one such edge.
 - **The corpus never enters this repository.** Fixtures are invented, apart
   from two public projects, dbt's Jaffle Shop and Fivetran's Shopify package
   ([0038](docs/decisions/0038-a-public-example-project-is-a-fixture.md)); point
