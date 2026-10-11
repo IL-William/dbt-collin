@@ -153,6 +153,8 @@ is both a column of its `FROM` and an alias given before it was read as the
 alias, where Snowflake and DuckDB read the column. Now a column a source is
 known to have wins, and the alias is read through only where no source is
 known to have its name. The 3507 model Snowflake project does not move, cache,
-`--indirect` and dumps. Shopify moves its one edge sqlglot disputed, Cal-ITP
-11 lines in 7 models, each read in the SQL and each now the column, and
+`--indirect` and dumps. Shopify moves its one edge sqlglot disputed. Cal-ITP
+loses 12 parsed edges and gains 6, in 7 models, each read in the SQL and each
+now the column; under `--indirect` the same 7 models lose 37 and gain 35, as
+pairs that lost their value fall back to the key that still reads them.
 lineage-library's two marks for it go.
