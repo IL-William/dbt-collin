@@ -12,9 +12,10 @@ done, so that whoever picks it up needs nothing but this tree.
 
 1. **Release 0.7.0**, once it is worth installing (0034). Since 0.6.0 a
    star's `REPLACE` and `ILIKE` are read, which moves no edge of the three
-   projects measured here, and a column wins over an alias of its name given
+   projects measured here; a column wins over an alias of its name given
    before it, which moves one edge of Shopify and none of the Snowflake
-   project.
+   project; and a star expands in its table's order (0044), which moves none
+   of the three.
 2. **A `PIVOT`'s value columns**, a patch to the engine's fork (0028).
    lineage-library marks it; no model of the Snowflake project uses one,
    eight of Cal-ITP do.
@@ -85,7 +86,10 @@ handed the column lists the engine was handed, names compared without case as
 collin compares them. 3506 of the 3507 models were compared; the other, an
 audit table reading only itself, has no parsed edge. Measured again on
 2026-10-11, once a window's keys were read in their own `SELECT` (0041); the
-engine's ninth patch moves nothing here.
+engine's ninth patch moves nothing here. Until 0044 both readers were handed
+each table's columns in alphabetical order, so a union pairing by position
+could not tell them apart. Handed in the table's order since then, sqlglot
+gives the same figures.
 
 | | Edges |
 | --- | --- |
@@ -158,8 +162,10 @@ against the warehouse or the YAML, 4466. sqlglot reads all 5548 of its edges
 the same way.
 
 **lineage-library** (0042), the lineage of an invented project written by hand:
-the pass gives 123 of its 129 facts. The other six are a `PIVOT`'s value
-columns, which collin marks as a known limit.
+the pass gives 182 of its 188 facts. The other six are a `PIVOT`'s value
+columns, which collin marks as a known limit. Its shapes include a `UNION ALL`
+of stars over tables that order their columns differently, read exactly since
+0044, and `dbt_utils.union_relations` as it compiles.
 
 ## Residuals already named
 

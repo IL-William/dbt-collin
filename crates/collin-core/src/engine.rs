@@ -121,8 +121,11 @@ const DEGRADING: &[&str] = &[
 
 #[derive(Default)]
 pub struct Resolved {
-    /// Output column names, lower case.
+    /// Output column names, lower case, sorted.
     pub outputs: Vec<String>,
+    /// The same names in the order the statement projects them: what a star
+    /// over this model expands to when it has no table to say (0044).
+    pub projection: Vec<String>,
     pub edges: Vec<RawEdge>,
     /// Every relation the SQL reads, uppercased and qualified as the SQL wrote
     /// it, `DB.SCHEMA.NAME` or `SCHEMA.NAME`, sorted, whether or not it was
@@ -2297,6 +2300,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         }
     }
 
+    out.projection = out.outputs.clone();
     out.outputs.sort();
     out.roots.sort();
     out.lost.sort_by(|a, b| a.column.cmp(&b.column));
@@ -2330,6 +2334,34 @@ mod tests {
         assert_eq!(r.edges.len(), 2);
         assert!(r.edges.iter().all(|e| e.from_relation == "DB.SCH.ORDERS"));
         assert!(r.edges.iter().all(|e| e.expression.is_empty()), "a star is a copy");
+    }
+
+    #[test]
+    fn a_star_expands_in_the_order_it_is_handed_and_a_union_pairs_by_it() {
+        // Two tables with the same columns in another order: the second
+        // branch's `a` sits where the first has `b`.
+        let r = resolve(
+            "select * from db.sch.cur union all select * from db.sch.old \
+             union all select y, x from db.sch.ext",
+            "snowflake",
+            &[vis("DB.SCH.CUR", &["b", "a"]), vis("DB.SCH.OLD", &["a", "b"]), vis("DB.SCH.EXT", &["x", "y"])],
+        );
+        assert_eq!(r.projection, vec!["b", "a"]);
+        assert_eq!(r.outputs, vec!["a", "b"]);
+        let mut pairs: Vec<(&str, &str, &str)> =
+            r.edges.iter().map(|e| (e.to_column.as_str(), e.from_relation.as_str(), e.from_column.as_str())).collect();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            vec![
+                ("a", "DB.SCH.CUR", "a"),
+                ("a", "DB.SCH.EXT", "x"),
+                ("a", "DB.SCH.OLD", "b"),
+                ("b", "DB.SCH.CUR", "b"),
+                ("b", "DB.SCH.EXT", "y"),
+                ("b", "DB.SCH.OLD", "a"),
+            ]
+        );
     }
 
     #[test]

@@ -13,6 +13,9 @@
 //! And its columns are the relation's own. dbt-bigquery lists the fields of a
 //! STRUCT beside it, as `parent.field`: no select writes one, so taken for
 //! columns they made every compile over a STRUCT look short of its table.
+//!
+//! They come in the table's order, by each column's `index`: a `select *`
+//! expands to that order, and a `UNION` pairs its branches by position (0044).
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -49,6 +52,10 @@ pub struct CatalogMetadata {
 pub struct CatalogColumn {
     #[serde(default)]
     pub name: String,
+    /// Where the column sits in the table, from 1. dbt writes it for every
+    /// column; one without it goes after those with it.
+    #[serde(default)]
+    pub index: Option<u64>,
 }
 
 /// A catalog entry describing another table than the one the manifest gives
@@ -65,7 +72,7 @@ pub struct Elsewhere {
 /// What the catalog witnesses, and what it was set aside for.
 #[derive(Default)]
 pub struct Witness {
-    /// unique_id -> column names, lower case and sorted.
+    /// unique_id -> column names, lower case, in the table's order.
     pub columns: HashMap<String, Vec<String>>,
     /// Sorted by unique_id.
     pub elsewhere: Vec<Elsewhere>,
@@ -104,19 +111,18 @@ impl RawCatalog {
                     continue;
                 }
             }
-            let mut cols: Vec<String> = entry
+            let mut listed: Vec<(Option<u64>, String)> = entry
                 .columns
                 .into_values()
-                .map(|c| c.name.to_lowercase())
-                .filter(|s| !s.is_empty())
+                .map(|c| (c.index, c.name.to_lowercase()))
+                .filter(|(_, s)| !s.is_empty())
                 .collect();
-            cols.sort();
-            cols.dedup();
+            listed.sort_by(|a, b| (a.0.is_none(), a.0, &a.1).cmp(&(b.0.is_none(), b.0, &b.1)));
+            let mut seen = std::collections::HashSet::new();
+            let mut cols: Vec<String> = listed.into_iter().map(|(_, c)| c).filter(|c| seen.insert(c.clone())).collect();
             // A field of a STRUCT column, named after it. A name with a dot and
             // no column before it is a column of its own, quoted.
-            let field = |c: &String| {
-                c.split_once('.').is_some_and(|(parent, _)| cols.binary_search(&parent.to_string()).is_ok())
-            };
+            let field = |c: &String| c.split_once('.').is_some_and(|(parent, _)| seen.contains(parent));
             let fields: Vec<String> = cols.iter().filter(|c| field(c)).cloned().collect();
             cols.retain(|c| !fields.contains(c));
             if !cols.is_empty() {
@@ -158,7 +164,11 @@ mod tests {
                 schema: schema.into(),
                 name: name.into(),
             },
-            columns: cols.iter().map(|c| (c.to_uppercase(), CatalogColumn { name: c.to_uppercase() })).collect(),
+            columns: cols
+                .iter()
+                .zip(1..)
+                .map(|(c, i)| (c.to_uppercase(), CatalogColumn { name: c.to_uppercase(), index: Some(i) }))
+                .collect(),
         }
     }
 
@@ -180,8 +190,18 @@ mod tests {
             vec![("model.shop.orders", entry(Some("DB_DEV"), "SALES", "ORDERS", &["id", "amount"]))],
             &[("model.shop.orders", "db_dev.sales.\"orders\"")],
         );
-        assert_eq!(w.columns["model.shop.orders"], vec!["amount", "id"]);
+        assert_eq!(w.columns["model.shop.orders"], vec!["id", "amount"]);
         assert!(w.elsewhere.is_empty());
+    }
+
+    #[test]
+    fn a_table_s_columns_come_in_its_order() {
+        // Not alphabetical: a star expands to this order, and a union pairs by
+        // it. A column dbt gave no index goes last.
+        let mut e = entry(Some("DB"), "SALES", "ORDERS", &["status", "id", "amount"]);
+        e.columns.insert("NOTE".into(), CatalogColumn { name: "NOTE".into(), index: None });
+        let w = witness(vec![("model.shop.orders", e)], &[("model.shop.orders", "db.sales.orders")]);
+        assert_eq!(w.columns["model.shop.orders"], vec!["status", "id", "amount", "note"]);
     }
 
     #[test]
@@ -255,6 +275,6 @@ mod tests {
             )],
             &[("model.shop.devices", "`p`.`ds`.`devices`")],
         );
-        assert_eq!(w.columns["model.shop.devices"], vec!["a.b", "device", "id"]);
+        assert_eq!(w.columns["model.shop.devices"], vec!["id", "device", "a.b"]);
     }
 }
