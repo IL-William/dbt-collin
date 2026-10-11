@@ -1,9 +1,9 @@
 # Next steps
 
-Where the lineage stands, and what would raise it. Measured on 2026-10-10 on a
-pinned copy of a 3507 model Snowflake project, its manifest and its catalog
-generated on one target with that target's environment, the engine at the
-fork's `collin-engine-2`. Not a decision: a list to come back to.
+Where the lineage stands, and what would raise it. Measured on 2026-10-11 with
+collin 0.6.0, the engine at the fork's `collin-engine-4`, on a pinned copy of a
+3507 model Snowflake project, its manifest and its catalog generated on one
+target with that target's environment. Not a decision: a list to come back to.
 
 ## Where the columns without an edge are
 
@@ -18,25 +18,33 @@ column but one. The 3468 without an edge, by cause:
 | 21 | Three models that read only their own table: two audit tables written outside dbt, whose incremental compile is `select * from` itself `where 1 = 0` or close to it, and a date spine reading its last date | None in dbt: the report counts them apart and names the models (0039). The project can declare a table written outside dbt as a source |
 | 1 | A view older than its code: it has a column neither the code nor its source has | Rebuild the view |
 
-The report names every one, with where the walk back stopped. It does not say
-what to do: that is the next thing worth adding.
+The report names every one, with where the walk back stopped, and gathers
+them into findings that say what to do (0040). Here there are three: two
+tables older than their code, three models reading only their own table, and
+YAML disagreeing with 1282 tables.
 
 ## A target compiled without its environment
 
 The same project was first measured on a compile for this target made without
 its environment file, so every model and source pointed at another
-environment's databases, and so did the catalog. There 94.8% of columns had an
-edge, and the gaps read like the project's own: 59 compiles an introspecting
-macro wrote as `select ,` or `select from`, because the parent it read did not
-exist in that environment; 1763 columns of tables built by older code; raw
-tables no source declares. None of it was there in the right environment.
-collin cannot tell which environment a target was meant for, but a project
-whose models of one target sit in databases named for another is a finding it
-could raise.
+environment's databases, and so did the catalog. There 94.8% of columns have an
+edge, 104 458 of 110 155, and the findings read like the project's own:
+
+- 59 compiles do not parse: an introspecting macro wrote them as `select ,` or
+  `select from`, because the parent it read did not exist in that environment;
+- 149 tables are older than their code, 2912 columns, and 32 behind it;
+- 39 models read a parent with no known columns, 5 a relation dbt was not told
+  of;
+- 17 compiles read a name their own CTE lacks, and 15 models have 108 columns
+  collin could not follow.
+
+None of it is there in the right environment. collin cannot tell which
+environment a target was meant for, but a project whose models of one target
+sit in databases named for another is a finding it could raise.
 
 ## What a catalog of another target did
 
-On the same day the manifest and the catalog in the project's `target/` came
+On 2026-10-10 the manifest and the catalog in the project's `target/` came
 from two targets: not one of the 2912 models both describe was the same table
 in each. collin matched them by unique_id and used every entry. An entry now
 witnesses only the table the manifest names
@@ -49,7 +57,8 @@ edge was compared with an independent reading of the same SQL by sqlglot,
 handed the column lists the engine was handed, names compared without case as
 collin compares them. 3506 of the 3507 models were compared; the other, an
 audit table reading only itself, has no parsed edge. Measured again on
-2026-10-11, once a window's keys were read in their own `SELECT` (0041).
+2026-10-11, once a window's keys were read in their own `SELECT` (0041); the
+engine's ninth patch moves nothing here.
 
 | | Edges |
 | --- | --- |
@@ -97,27 +106,33 @@ The project above is Snowflake and has its own shapes. Two public ones show
 others.
 
 **Cal-ITP**, the dbt artifacts Caltrans publishes for its transit warehouse:
-624 BigQuery models, manifest and catalog from one run, pinned outside the tree.
-dbt quotes a BigQuery relation in backticks, which `norm_relation` kept, so no
-relation matched and 19 594 of 20 386 edges left the graph through `rel:`.
-With that fixed, 92.5% of columns had an edge and 93.4% against the warehouse;
-with the engine's seventh patch too, 92.8% and 93.6%. The 1162 without one that
-were not roots before that patch, by first cause:
+624 BigQuery models, manifest and catalog from one run, pinned outside the
+tree. 95.0% of columns have an edge, 16 165 of 17 008, and 96.0% against the
+warehouse, 16 161 of 16 841. It took four changes to get there: dbt's backticks
+read as quotes, so that its relations match; a STRUCT's fields, which the
+catalog lists, no longer taken for columns (#15); two CTEs of one name read
+apart, the engine's seventh patch; and a `UNION`'s branches paired by
+position, its ninth, which moved three models from contradicted by the
+warehouse to confirmed. The 680 columns still without an edge, by first cause:
 
 | Columns | Cause | Where it would be fixed |
 | --- | --- | --- |
-| 470 | A field of a STRUCT, `metadata.extract_ts`, read as a column of a table named `metadata` | The engine |
-| 395 | The fields of a STRUCT, which the catalog lists as columns, `device.fo_device_type`: no select can write one. They also mark 22 of the 38 degraded compiles | collin: a field is not a column |
-| 121 | A column of an `UNNEST` alias or of a `PIVOT`'s output, in 57 and 8 models | The engine |
-| 56 | 29 models set aside for two CTEs of one name (0018): a macro wraps each source in its own `WITH ranked`. Read since the engine's seventh patch (0028), 500 inferred edges becoming 579 parsed ones | Done |
-| 120 | Not read yet: 51 settled column by column, 42 inferred where no parent has the name, 23 in one audit log model, 4 in a compile that does not parse | |
+| 447 | Lost, a name unresolved: led by a STRUCT's field, `metadata.extract_ts`, read as a column of a table named `metadata` | The engine |
+| 108 | Lost at a column the engine gives no source: all but a handful in models that `UNNEST` or `PIVOT` | The engine |
+| 70 | Lost, a name the walk never reached | Not read yet |
+| 51 | Settled column by column: the warehouse contradicts the compile | Not read yet |
+| 4 | A compile that does not parse | |
 
-**Fivetran's Shopify package**, a fixture (0038): 240 models, 4875 edges, 89.6%
-of columns covered. sqlglot reads 4244 of its 4245 parsed edges the same way.
-16 marts were set aside, their 630 edges inferred: ephemeral models are inlined
-as CTEs, each with its own `WITH`, and two of them name a CTE alike (0018).
-Since the engine's seventh patch (0028) they are read: 1303 parsed edges,
-5548 in all, and sqlglot reads 5547 of them the same way.
+BigQuery is not a priority for now: these wait.
+
+**Fivetran's Shopify package**, a fixture (0038): 240 models and 5548 edges,
+all parsed. 97.2% of columns have an edge, 4996 of 5142, and every column
+against the warehouse or the YAML, 4466. sqlglot reads 5547 of its edges the
+same way.
+
+**lineage-library** (0042), the lineage of an invented project written by hand:
+the pass gives its 105 facts exactly, and collin marks none of them as a known
+limit.
 
 ## Residuals already named
 
@@ -128,7 +143,7 @@ Since the engine's seventh patch (0028) they are read: 1303 parsed edges,
   by every candidate, or by manifest order (0027). None here: one edge is
   inferred.
 - **`* REPLACE (...)` and `* ILIKE '...'`** are not read: the star expands to
-  every column.
+  every column. No model of the three projects above uses either.
 - **A window key the syntax tree cannot bind**, in a named window, an
   unaliased derived table, or a bare name several sources have, is read as
   before 0041, against the source the engine hung the window off: 3 of the 29
