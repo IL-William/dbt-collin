@@ -226,6 +226,10 @@ lists propagate from the leaves instead of needing a warehouse.
   ([0032](docs/decisions/0032-the-loudest-role-over-every-path-stands.md)).
 - **`* REPLACE (...)` and `* ILIKE '...'`** are not read: the star expands to
   every column, as it would without them. `EXCLUDE`, `EXCEPT` and `RENAME` are.
+- **A `PIVOT`'s value columns** get no lineage: the engine reads a `PIVOT` on a
+  best effort, and the warehouse then contradicts the compile. lineage-library
+  carries this limit and the two above as marked lines
+  ([0042](docs/decisions/0042-an-invented-project-carries-its-lineage-by-hand.md)).
 - **The corpus never enters this repository.** Fixtures are invented, apart
   from two public projects, dbt's Jaffle Shop and Fivetran's Shopify package
   ([0038](docs/decisions/0038-a-public-example-project-is-a-fixture.md)); point
