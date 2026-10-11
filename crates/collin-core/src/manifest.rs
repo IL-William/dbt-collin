@@ -135,6 +135,9 @@ impl Node {
     pub fn is_model(&self) -> bool {
         self.kind == "model"
     }
+    pub fn is_source(&self) -> bool {
+        self.kind == "source"
+    }
     pub fn is_ephemeral(&self) -> bool {
         self.materialized == "ephemeral"
     }

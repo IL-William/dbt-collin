@@ -100,6 +100,23 @@ pub fn of(report: &Report) -> Vec<Finding> {
     });
 
     group(&mut out, report, Group {
+        category: "source_without_columns",
+        owner: "inputs",
+        severity: "warning",
+        one: "model reads a source with no known columns",
+        many: "models read a source with no known columns",
+        why: "A source these models read has no catalog entry and no columns in its YAML, so the \
+              engine was never told what it holds and cannot place what is read from it. dbt \
+              builds no source, so only a catalog or the YAML can give it columns. Usually \
+              catalog.json was not generated, or its target could not see these tables.",
+        action: "Generate catalog.json with the manifest's target, with credentials that can read \
+                 these tables: dbt docs generate --target <target>. Or document their columns in \
+                 the sources' YAML.",
+        pick: |m| some_list(m.unknown_sources.iter().cloned()),
+        columns: |_| 0,
+    });
+
+    group(&mut out, report, Group {
         category: "compile_does_not_parse",
         owner: "project",
         severity: "error",
@@ -156,7 +173,9 @@ pub fn of(report: &Report) -> Vec<Finding> {
               the engine was never told what it holds and cannot place what is read from it.",
         action: "Build the parent in this target and generate catalog.json again, or document \
                  its columns in YAML.",
-        pick: |m| some_list(m.unknown_relations.iter().cloned()),
+        // Not a source: building one again is not its remedy, which
+        // `source_without_columns` gives.
+        pick: |m| some_list(m.unknown_relations.iter().filter(|r| !m.unknown_sources.contains(r)).cloned()),
         columns: |_| 0,
     });
 
@@ -368,6 +387,38 @@ mod tests {
         assert_eq!(parse[1].detail, "PARSE_ERROR: Expected an expression, found: ,");
         assert_eq!(found[2].columns, 2);
         assert_eq!(found[2].models[0].detail, "old_a, old_b");
+    }
+
+    #[test]
+    fn a_source_without_columns_is_not_told_to_be_built() {
+        // dbt builds no source, so its remedy is the catalog's or the YAML's;
+        // a seed's is still to build it.
+        let mut both = model("both");
+        both.unknown_relations = vec!["DB.LAND.EVENTS".into(), "DB.SEEDS.CODES".into()];
+        both.unknown_sources = vec!["DB.LAND.EVENTS".into()];
+        let mut only = model("only");
+        only.unknown_relations = vec!["DB.LAND.EVENTS".into()];
+        only.unknown_sources = vec!["DB.LAND.EVENTS".into()];
+        let found = of(&Report { models: vec![both, only], ..Default::default() });
+
+        let named = |f: &Finding| -> Vec<(String, String)> {
+            f.models.iter().map(|m| (m.name.clone(), m.detail.clone())).collect()
+        };
+        let shape: Vec<(&str, &str, Vec<(String, String)>)> =
+            found.iter().map(|f| (f.category, f.owner, named(f))).collect();
+        let pair = |name: &str, detail: &str| (name.to_string(), detail.to_string());
+        assert_eq!(
+            shape,
+            vec![
+                (
+                    "source_without_columns",
+                    "inputs",
+                    vec![pair("both", "DB.LAND.EVENTS"), pair("only", "DB.LAND.EVENTS")]
+                ),
+                ("parent_without_columns", "project", vec![pair("both", "DB.SEEDS.CODES")]),
+            ]
+        );
+        assert_eq!(found[0].title, "2 models read a source with no known columns");
     }
 
     #[test]

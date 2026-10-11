@@ -254,6 +254,13 @@ pub struct ModelReport {
     /// of them. The actionable list: give each one its columns.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unknown_relations: Vec<String>,
+    /// Those of `unknown_relations` that are sources, spelled the same. dbt
+    /// builds no source, so its columns can only come from a catalog generated
+    /// where the table exists, or from its YAML: a remedy of its own. A subset
+    /// rather than a split, so that `unknown_relations` still lists every
+    /// parent the engine was not told of (0043).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unknown_sources: Vec<String>,
     /// Relations the SQL reads that are neither the model nor anything dbt says
     /// it depends on: a raw table no source declares, or a node read without
     /// `ref`. Apart from `unknown_relations` because the remedy differs: here it
@@ -501,6 +508,7 @@ mod tests {
             parse_error: None,
             issues: Vec::new(),
             unknown_relations: Vec::new(),
+            unknown_sources: Vec::new(),
             undeclared_relations,
             missing_columns: Vec::new(),
             unexpected_columns: Vec::new(),

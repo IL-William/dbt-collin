@@ -269,11 +269,18 @@ pub fn run_observed(
         }
         let mut visible: Vec<Visible> = Vec::new();
         let mut unknown_relations: Vec<String> = Vec::new();
+        let mut unknown_sources: Vec<String> = Vec::new();
         for parent in &parents {
             if parent.columns.is_empty() {
                 // Normalised here because this list is read by a person, and one
                 // spelling is easier to scan than dbt's mixture of quoted and not.
-                unknown_relations.push(norm_relation(&parent.node.relation));
+                let relation = norm_relation(&parent.node.relation);
+                // dbt builds no source, so building it again cannot give it
+                // columns: only a catalog or its YAML can (0043).
+                if parent.node.is_source() {
+                    unknown_sources.push(relation.clone());
+                }
+                unknown_relations.push(relation);
                 continue;
             }
             // Raw, quotes and all: the engine has to match this against the SQL.
@@ -282,6 +289,8 @@ pub fn run_observed(
         }
         unknown_relations.sort();
         unknown_relations.dedup();
+        unknown_sources.sort();
+        unknown_sources.dedup();
 
         let mut resolved = match model.no_sql() {
             Some(why) => engine::Resolved { parse_error: Some(why), ..Default::default() },
@@ -594,6 +603,7 @@ pub fn run_observed(
                     })
                     .collect(),
                 unknown_relations,
+                unknown_sources,
                 undeclared_relations,
                 missing_columns,
                 unexpected_columns,
@@ -2750,6 +2760,25 @@ mod tests {
             shape(&r.edges).into_iter().filter(|e| e.2 == "model.p.hard").collect();
         let stated = ("rel:raw_db.dbo.orders_base", "id", "model.p.hard", "id", "passthrough");
         assert_eq!(into_hard, vec![stated]);
+    }
+
+    #[test]
+    fn a_source_without_columns_is_listed_apart_from_a_parent_dbt_builds() {
+        // Neither has a catalog entry or a column in its YAML. `dbt seed`
+        // builds the seed; nothing in dbt builds the source.
+        let mut events = node("source.p.land.events", "db.land.events", &[], &[]);
+        events.1.kind = "source".into();
+        let mut codes = node("seed.p.codes", "db.seeds.codes", &[], &[]);
+        codes.1.kind = "seed".into();
+        let mut tagged =
+            node("model.p.tagged", "db.sch.tagged", &["source.p.land.events", "seed.p.codes"], &[]);
+        tagged.1.sql =
+            "select e.id, c.label from db.land.events e join db.seeds.codes c on e.code = c.code".into();
+        let r = run(&project_of(vec![events, codes, tagged]), HashMap::new(), &opts(true, false));
+
+        let m = r.report.models.iter().find(|m| m.unique_id == "model.p.tagged").unwrap();
+        assert_eq!(m.unknown_relations, cols(&["DB.LAND.EVENTS", "DB.SEEDS.CODES"]), "every one, as before");
+        assert_eq!(m.unknown_sources, cols(&["DB.LAND.EVENTS"]));
     }
 
     #[test]
