@@ -57,7 +57,7 @@ audit table reading only itself, has no parsed edge. Measured again on
 | By collin alone | 27 |
 | By sqlglot alone | 1358 |
 
-The disagreements sit in 6 models, and each was read in the SQL.
+The disagreements sit in 5 models, and each was read in the SQL.
 
 - **collin alone and right, 27.** 17 sit under `UNION ALL BY NAME`, which
   sqlglot pairs by position: its own 134 edges in that model are those
@@ -79,6 +79,17 @@ backs the roots too: following each through its CTEs, 3424 of the 3441 then
 counted end at no table. Of the other 17, 15 reach an incremental model's own
 table (0012), one is a literal the check misread, and one, a `CASE` on a
 `FLATTEN`'s key, has had an edge since the engine's eighth patch (0028).
+
+Two readers agreeing can share a blind spot: both are handed the same SQL and
+the same column lists. A third reading saw neither answer. 115 output columns
+were drawn at random: 70 across the project, 30 of any column, 30 with an edge
+other than a copy and 10 roots, and 45 harder ones, 20 in models of four CTEs
+or more with a join, 10 with three inputs or more, 15 under a window, an
+aggregate or a hash. Language model agents, shown only each model's SQL and
+the column lists, traced every one to the columns it reads, 277 in all. collin
+gave exactly that set for all 115, and so did sqlglot. None wrong in 115 puts
+the columns whose inputs collin gets wrong under 3% at 95% confidence; the
+sample says no more than that.
 
 ## On public projects
 
