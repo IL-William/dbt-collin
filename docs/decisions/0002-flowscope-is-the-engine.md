@@ -37,6 +37,11 @@ through chains of CTEs once a relation is fully qualified, and it raises
 - **`polyglot-sql`.** A Rust port of SQLGlot with schema-aware star expansion, so
   a real candidate. Not measured to beat flowscope here, and adopting on a
   README is what this decision exists to avoid.
+- **SQLGlot**, the usual reference for SQL lineage, with a resolver of its own.
+  Too slow at this size: measured on 2026-10-11, reading the 3506 compiled
+  models of the 3507 model project once took it 29 minutes, where collin takes
+  about 8 seconds end to end. Its own parser, in Python, is what makes it the
+  independent reading the precision check in `docs/next-steps.md` needs.
 
 ## Consequences
 

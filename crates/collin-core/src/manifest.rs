@@ -188,7 +188,7 @@ pub struct Project {
 /// cannot quote a name with the other, so the only name this could misread
 /// begins or ends with the other character. Carrying the adapter to every
 /// place a name is compared would buy nothing more.
-const QUOTES: [char; 2] = ['"', '`'];
+pub(crate) const QUOTES: [char; 2] = ['"', '`'];
 
 /// Uppercase and strip quotes, so a name from dbt, one from the catalog and one
 /// from the SQL engine compare equal.

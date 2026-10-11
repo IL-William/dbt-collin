@@ -46,6 +46,7 @@ is built this way, for whoever changes it next.
 | [0038](0038-a-public-example-project-is-a-fixture.md) | A public example project is a fixture | adding a fixture collin did not invent, or accepting a change to the expected caches of one |
 | [0039](0039-a-model-reading-only-itself-has-no-parent-to-find.md) | A model reading only itself has no parent to find | changing what counts as a lost column, what the independent coverage leaves out, or how a model reading its own relation is reported |
 | [0040](0040-a-finding-says-what-to-do.md) | A finding says what to do | adding or rewording a finding, changing who a finding is for, or putting in one what the models' entries do not say |
+| [0041](0041-a-window-key-is-read-in-its-own-select.md) | A window key is read in its own SELECT | changing where the keys of a window, a `WITHIN GROUP` or an `ORDER BY` inside a call are read, or which source such a key is credited to |
 
 ## The other side of the boundary
 

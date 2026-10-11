@@ -17,11 +17,14 @@ use flowscope_core::types::{
     issue_codes, AnalyzeRequest, ColumnSchema, Dialect, EdgeType, FilterClauseType, Node as FsNode,
     NodeType, SchemaMetadata, SchemaTable, Severity,
 };
-use sqlparser::ast::{Expr, Query, SelectItem, SetExpr, TableFactor, Visit, Visitor};
+use sqlparser::ast::{
+    Expr, Query, SelectItem, SetExpr, Statement, TableFactor, Visit, VisitMut, Visitor, VisitorMut,
+    WindowType,
+};
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
-use crate::manifest::norm_relation;
+use crate::manifest::{norm_relation, QUOTES};
 
 /// One relation the SQL may read, with the columns it exposes.
 pub struct Visible {
@@ -579,6 +582,194 @@ impl Visitor for Qualifies {
     }
 }
 
+/// A select list item holding a window or an ordered aggregate, with the keys
+/// they split and sort by, read where the item is written.
+///
+/// The engine reads none of these keys. A window whose function takes no
+/// column, `row_number()` or `dense_rank()`, is hung off one source of its
+/// `SELECT`, the first, and the text was then read against that source alone:
+/// a key qualified with another source was lost, or credited to the first one
+/// when it had a column of that name. A `WITHIN GROUP` or an `ORDER BY` inside
+/// the call was never read. Read here, a qualified key goes to the source its
+/// qualifier names, and a bare one to the one source having it.
+struct Ordering {
+    /// The item's expression as the engine prints it, which is how the walk
+    /// finds the item again.
+    text: String,
+    /// The same, its keys left out: what is left for the text reading.
+    unordered: String,
+    /// The CTE or derived table the `SELECT` defines, lower case, or `None`
+    /// for the statement's own.
+    scope: Option<String>,
+    sources: Vec<(String, Option<String>)>,
+    keys: Vec<(Option<String>, String)>,
+}
+
+/// Where an ordering key leads, once bound in its `SELECT`.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum OrderingKey<'r> {
+    /// A column of a relation: the edge itself.
+    Edge(String, String),
+    /// A column of a CTE or derived table: the walk goes on from it.
+    Walk(&'r str),
+}
+
+/// The ordering keys of an expression, not descending into a subquery.
+#[derive(Default)]
+struct OrderingNames {
+    depth: usize,
+    found: bool,
+    /// A window named in a `WINDOW` clause, whose keys are written elsewhere.
+    named: bool,
+    names: Vec<(Option<String>, String)>,
+}
+
+impl Visitor for OrderingNames {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, _: &Query) -> ControlFlow<()> {
+        self.depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _: &Query) -> ControlFlow<()> {
+        self.depth -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<()> {
+        let Expr::Function(f) = expr else { return ControlFlow::Continue(()) };
+        if self.depth > 0 {
+            return ControlFlow::Continue(());
+        }
+        let mut sorted: Vec<&Expr> = f.within_group.iter().map(|o| &o.expr).collect();
+        match &f.over {
+            Some(WindowType::WindowSpec(spec)) => {
+                self.found = true;
+                self.named |= spec.window_name.is_some();
+                sorted.extend(spec.partition_by.iter());
+                sorted.extend(spec.order_by.iter().map(|o| &o.expr));
+            }
+            Some(WindowType::NamedWindow(_)) => {
+                self.found = true;
+                self.named = true;
+            }
+            None => {}
+        }
+        if let sqlparser::ast::FunctionArguments::List(list) = &f.args {
+            for clause in &list.clauses {
+                if let sqlparser::ast::FunctionArgumentClause::OrderBy(by) = clause {
+                    sorted.extend(by.iter().map(|o| &o.expr));
+                }
+            }
+        }
+        self.found |= !f.within_group.is_empty() || !sorted.is_empty();
+        for e in sorted {
+            self.names.extend(names_in(e));
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+/// Takes the keys `OrderingNames` reads out of an expression, so that the
+/// text reading cannot read them a second time against the wrong source.
+#[derive(Default)]
+struct Unorder {
+    depth: usize,
+}
+
+impl VisitorMut for Unorder {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, _: &mut Query) -> ControlFlow<()> {
+        self.depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _: &mut Query) -> ControlFlow<()> {
+        self.depth -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<()> {
+        let Expr::Function(f) = expr else { return ControlFlow::Continue(()) };
+        if self.depth > 0 {
+            return ControlFlow::Continue(());
+        }
+        f.within_group.clear();
+        if let Some(WindowType::WindowSpec(spec)) = &mut f.over {
+            spec.partition_by.clear();
+            spec.order_by.clear();
+        }
+        if let sqlparser::ast::FunctionArguments::List(list) = &mut f.args {
+            list.clauses.retain(|c| !matches!(c, sqlparser::ast::FunctionArgumentClause::OrderBy(_)));
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+/// Every `Ordering` of a query, its CTEs and derived tables included.
+fn orderings(query: &Query, scope: Option<String>, out: &mut Vec<Ordering>) {
+    if let Some(with) = &query.with {
+        for cte in &with.cte_tables {
+            orderings(&cte.query, Some(cte.alias.name.value.to_lowercase()), out);
+        }
+    }
+    ordering_body(&query.body, &scope, out);
+}
+
+fn ordering_body(body: &SetExpr, scope: &Option<String>, out: &mut Vec<Ordering>) {
+    match body {
+        SetExpr::Select(select) => {
+            // A table function, an `UNNEST` or a nested join brings names
+            // `select_sources` does not list, so a bare key could be theirs.
+            // Such a `SELECT` is left to the text reading.
+            let mut listed = true;
+            for from in &select.from {
+                let factors = std::iter::once(&from.relation).chain(from.joins.iter().map(|j| &j.relation));
+                for factor in factors {
+                    match factor {
+                        TableFactor::Table { args: None, .. } => {}
+                        TableFactor::Derived { subquery, alias: Some(alias), .. } => {
+                            orderings(subquery, Some(alias.name.value.to_lowercase()), out)
+                        }
+                        _ => listed = false,
+                    }
+                }
+            }
+            if !listed {
+                return;
+            }
+            let sources = select_sources(select);
+            for item in &select.projection {
+                let (SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. }) = item else {
+                    continue;
+                };
+                let mut read = OrderingNames::default();
+                let _ = expr.visit(&mut read);
+                if !read.found || read.named {
+                    continue;
+                }
+                let mut unordered = expr.clone();
+                let _ = VisitMut::visit(&mut unordered, &mut Unorder::default());
+                out.push(Ordering {
+                    text: expr.to_string(),
+                    unordered: unordered.to_string(),
+                    scope: scope.clone(),
+                    sources: sources.clone(),
+                    keys: read.names,
+                });
+            }
+        }
+        SetExpr::Query(query) => orderings(query, scope.clone(), out),
+        SetExpr::SetOperation { left, right, .. } => {
+            ordering_body(left, scope, out);
+            ordering_body(right, scope, out);
+        }
+        _ => {}
+    }
+}
+
 /// What the syntax tree says of a statement's scopes that the engine's graph
 /// cannot.
 #[derive(Default)]
@@ -595,6 +786,7 @@ struct Scopes {
     qualifies: Vec<Qualify>,
     joins: Vec<JoinKeys>,
     predicates: Vec<Predicate>,
+    orderings: Vec<Ordering>,
 }
 
 /// Every name the SQL gives to two scopes of one statement, see `MergedScope`,
@@ -618,6 +810,9 @@ fn scopes(sql: &str, dialect: Dialect) -> Scopes {
         out.qualifies.extend(read.qualifies);
         out.joins.extend(read.joins);
         out.predicates.extend(read.predicates);
+        if let Statement::Query(query) = statement {
+            orderings(query, None, &mut out.orderings);
+        }
         let ctes: HashSet<String> =
             names.ctes.iter().map(|c| c.trim_matches('"').to_lowercase()).collect();
         out.values.extend(names.values.iter().cloned());
@@ -848,6 +1043,9 @@ fn word_at(bytes: &[u8], at: usize, word: &[u8]) -> bool {
 /// Returned as slices of the input so the caller can hand them straight to
 /// `columns_named_in`, which is the only thing allowed to decide that a name is
 /// a column.
+///
+/// The text has no qualifiers to go by, so this is read only where `Ordering`
+/// cannot bind the keys in the `SELECT` that writes them.
 fn over_clauses(expr: &str) -> Vec<&str> {
     let bytes = expr.as_bytes();
     let mut out = Vec::new();
@@ -1494,7 +1692,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         });
         return out;
     }
-    let Scopes { merged, star_over_relation, values, flattens, qualifies, joins, predicates } =
+    let Scopes { merged, star_over_relation, values, flattens, qualifies, joins, predicates, orderings } =
         scopes(sql, split_dialect(adapter));
     out.merged_scopes = merged;
 
@@ -1566,6 +1764,80 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     let mut expr_of: HashMap<String, String> = HashMap::new();
     let mut nodes_of: HashMap<String, Vec<&str>> = HashMap::new();
 
+    let ctes: HashMap<String, Vec<&str>> = res
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == NodeType::Cte)
+        .fold(HashMap::new(), |mut m, n| {
+            m.entry(n.label.to_lowercase()).or_insert_with(Vec::new).push(&*n.id);
+            m
+        });
+    // The ordering keys of the column `id`, whose expression is `text`, each
+    // bound in the `SELECT` that writes it: an edge for a key of a relation,
+    // the column to walk on from for a key of a CTE or derived table. `None`
+    // when the item is not found in its scope, or a key cannot be told: a
+    // qualifier binding no source, a bare name several sources have, a
+    // relation with no column list, or a CTE name given to several scopes.
+    // The text is then read as before.
+    let mut by_text: HashMap<&str, Vec<&Ordering>> = HashMap::new();
+    for o in &orderings {
+        by_text.entry(o.text.as_str()).or_default().push(o);
+    }
+    let ordered = |id: &str, text: &str| -> Option<(Vec<OrderingKey<'_>>, &str)> {
+        let scope = match by_id.get(owner.get(id)?)? {
+            n if n.node_type == NodeType::Output => None,
+            n if n.node_type == NodeType::Cte => Some(n.label.trim_matches(&QUOTES[..]).to_lowercase()),
+            _ => return None,
+        };
+        let mut found: Option<(Vec<OrderingKey<'_>>, &str)> = None;
+        for o in by_text.get(text)?.iter().filter(|o| o.scope == scope) {
+            let mut keys: Vec<OrderingKey<'_>> = Vec::new();
+            for (qualifier, name) in &o.keys {
+                let mut bound = false;
+                let mut owners: Vec<OrderingKey<'_>> = Vec::new();
+                for (source, alias) in &o.sources {
+                    if let Some(q) = qualifier {
+                        let last = source.rsplit('.').next().unwrap_or(source).trim_matches(&QUOTES[..]);
+                        if alias.as_ref() != Some(q) && (alias.is_some() || last != q) {
+                            continue;
+                        }
+                    }
+                    bound = true;
+                    match ctes.get(source.trim_matches(&QUOTES[..])) {
+                        Some(ids) if !source.contains('.') => {
+                            let [cte] = ids.as_slice() else { return None };
+                            let column = owned
+                                .get(cte)
+                                .into_iter()
+                                .flatten()
+                                .find(|c| by_id.get(*c).is_some_and(|n| n.label.eq_ignore_ascii_case(name)));
+                            owners.extend(column.map(|c| OrderingKey::Walk(c)));
+                        }
+                        _ => {
+                            let rel = norm_relation(source);
+                            if known.get(&rel)?.contains(name) {
+                                owners.push(OrderingKey::Edge(rel, name.clone()));
+                            }
+                        }
+                    }
+                }
+                if (qualifier.is_some() && !bound) || owners.len() > 1 {
+                    return None;
+                }
+                keys.extend(owners);
+            }
+            keys.sort();
+            keys.dedup();
+            match &found {
+                // Two items of one text in one scope, the two sides of a
+                // `UNION`, count only when they bind the same keys: the walk
+                // cannot tell which side it is on.
+                Some((other, _)) if *other != keys => return None,
+                _ => found = Some((keys, o.unordered.as_str())),
+            }
+        }
+        found
+    };
     for col in res.nodes.iter().filter(|n| n.node_type == NodeType::Column) {
         let Some(own) = owner.get(&*col.id) else { continue };
         if !output_ids.contains(own) {
@@ -1739,10 +2011,29 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                     // A column the engine resolved took the column to column
                     // path, so `columns_named_in` never ran on its expression,
                     // and whatever a window there reads is unread. Read it at
-                    // this hop, against the scope the column comes from: a table
-                    // gives the edge at once, a CTE the columns to go on from.
-                    // See `over_clauses`.
-                    if let (Some(own), Some(scope)) =
+                    // this hop: where the `SELECT` writing it binds each key
+                    // (see `Ordering`), and then the text left for the steps
+                    // beyond holds none of them; otherwise against the scope
+                    // the column comes from, a table giving the edge at once, a
+                    // CTE the columns to go on from (see `over_clauses`).
+                    let keys = edge_expr.and_then(|own| ordered(id, own));
+                    if let Some((keys, _)) = &keys {
+                        for key in keys {
+                            match key {
+                                OrderingKey::Edge(rel, from_column) => put_edge(
+                                    &mut out.edges,
+                                    &mut seen_edge,
+                                    RawEdge {
+                                        from_relation: rel.clone(),
+                                        from_column: from_column.clone(),
+                                        to_column: to_column.clone(),
+                                        expression: text.unwrap_or_default().to_string(),
+                                    },
+                                ),
+                                OrderingKey::Walk(next) => stack.push((next, true, text, None)),
+                            }
+                        }
+                    } else if let (Some(own), Some(scope)) =
                         (*edge_expr, owner.get(from).and_then(|o| by_id.get(o).map(|n| (*o, *n))))
                     {
                         for body in over_clauses(own) {
@@ -1777,7 +2068,11 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                             }
                         }
                     }
-                    stack.push((from, carried, text, edge_expr.or(reading)));
+                    let reading = match keys {
+                        Some((_, unordered)) => Some(unordered),
+                        None => edge_expr.or(reading),
+                    };
+                    stack.push((from, carried, text, reading));
                 }
             }
         }
@@ -1819,14 +2114,6 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     // back to the relation, renames followed. A name several sources have, or
     // a qualifier that binds to none, is counted and read by nobody: Snowflake
     // refuses an ambiguous name, so ambiguity means the scope was misread.
-    let ctes: HashMap<String, Vec<&str>> = res
-        .nodes
-        .iter()
-        .filter(|n| n.node_type == NodeType::Cte)
-        .fold(HashMap::new(), |mut m, n| {
-            m.entry(n.label.to_lowercase()).or_insert_with(Vec::new).push(&*n.id);
-            m
-        });
     // Each name in the scope of its own `SELECT`: to the source its qualifier
     // binds, or to the one source having it, followed through CTEs back to a
     // relation whose list has the column. `None` when several sources have it
@@ -2511,6 +2798,94 @@ mod tests {
             &[vis("DB.S.T", &["a", "b", "c"])],
         );
         assert_eq!(read_from(&r), vec![("DB.S.T", "a"), ("DB.S.T", "b")]);
+    }
+
+    fn read_into<'a>(r: &'a Resolved, column: &str) -> Vec<(&'a str, &'a str)> {
+        let mut out: Vec<(&str, &str)> = r
+            .edges
+            .iter()
+            .filter(|e| e.to_column == column)
+            .map(|e| (e.from_relation.as_str(), e.from_column.as_str()))
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    #[test]
+    fn a_window_key_goes_to_the_source_its_qualifier_names() {
+        // The engine hangs `row_number()` off the first source alone, which
+        // has a `k` too: read against it, `m.k` became `e`'s.
+        let r = resolve(
+            "with e as (select * from db.s.runs), m as (select * from db.s.models), \
+             r as (select e.k, row_number() over (partition by m.k, e.flag order by e.ts desc) as rn \
+             from e join m on e.k = m.k) \
+             select k, max(case when rn = 1 then k end) as last_k from r group by k",
+            "snowflake",
+            &[vis("DB.S.RUNS", &["k", "flag", "ts"]), vis("DB.S.MODELS", &["k", "name"])],
+        );
+        assert_eq!(
+            read_into(&r, "last_k"),
+            vec![("DB.S.MODELS", "k"), ("DB.S.RUNS", "flag"), ("DB.S.RUNS", "k"), ("DB.S.RUNS", "ts")]
+        );
+        let r = resolve(
+            "select e.k, row_number() over (partition by m.k order by e.ts) as rn \
+             from db.s.runs e join db.s.models m on e.k = m.k",
+            "snowflake",
+            &[vis("DB.S.RUNS", &["k", "flag", "ts"]), vis("DB.S.MODELS", &["k", "name"])],
+        );
+        assert_eq!(read_into(&r, "rn"), vec![("DB.S.MODELS", "k"), ("DB.S.RUNS", "ts")]);
+    }
+
+    #[test]
+    fn a_window_key_of_a_source_after_the_first_is_read() {
+        let r = resolve(
+            "with h as (select * from db.s.hdr), l as (select * from db.s.lin) \
+             select h.ha, dense_rank() over (partition by h.ha order by l.lc) as layer \
+             from h join l on h.hid = l.lhid",
+            "snowflake",
+            &[vis("DB.S.HDR", &["ha", "hid"]), vis("DB.S.LIN", &["lc", "lhid"])],
+        );
+        assert_eq!(read_into(&r, "layer"), vec![("DB.S.HDR", "ha"), ("DB.S.LIN", "lc")]);
+    }
+
+    #[test]
+    fn a_window_key_is_bound_in_a_derived_table() {
+        let r = resolve(
+            "select d.rn from (select row_number() over (partition by b.k order by a.ts) as rn \
+             from db.s.a a join db.s.b b on a.id = b.id) d",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "k", "ts"]), vis("DB.S.B", &["id", "k"])],
+        );
+        assert_eq!(read_into(&r, "rn"), vec![("DB.S.A", "ts"), ("DB.S.B", "k")]);
+    }
+
+    #[test]
+    fn the_key_of_an_ordered_aggregate_is_read() {
+        for (sql, adapter) in [
+            ("select sub, array_agg(v) within group (order by n) as arr from db.s.pr group by sub", "snowflake"),
+            ("select sub, array_agg(v order by n) as arr from db.s.pr group by sub", "bigquery"),
+        ] {
+            let r = resolve(sql, adapter, &[vis("DB.S.PR", &["sub", "v", "n"])]);
+            assert_eq!(read_into(&r, "arr"), vec![("DB.S.PR", "n"), ("DB.S.PR", "v")], "{sql}");
+        }
+    }
+
+    #[test]
+    fn the_two_sides_of_a_union_each_give_their_window_keys() {
+        // One text in one scope, binding other keys on each side: the walk
+        // cannot tell the sides apart, so the text is read against each.
+        let r = resolve(
+            "with u as (select row_number() over (partition by g order by ts) as rn from db.s.a \
+             union all select row_number() over (partition by g order by ts) as rn from db.s.b) \
+             select rn from u",
+            "snowflake",
+            &[vis("DB.S.A", &["g", "ts"]), vis("DB.S.B", &["g", "ts"])],
+        );
+        assert_eq!(
+            read_into(&r, "rn"),
+            vec![("DB.S.A", "g"), ("DB.S.A", "ts"), ("DB.S.B", "g"), ("DB.S.B", "ts")]
+        );
     }
 
     #[test]
