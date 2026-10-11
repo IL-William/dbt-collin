@@ -228,6 +228,11 @@ lists propagate from the leaves instead of needing a warehouse.
   best effort, and the warehouse then contradicts the compile. lineage-library
   carries this limit as marked lines
   ([0042](docs/decisions/0042-an-invented-project-carries-its-lineage-by-hand.md)).
+- **A star expands in alphabetical order**, not in its table's: every column
+  list is sorted, the catalog's among them. A `UNION` pairs its branches by
+  position, so where its branches' tables order their columns differently, or
+  a branch written out faces a star, the pairing is by name rather than by
+  position. lineage-library carries this limit as marked lines.
 - **The corpus never enters this repository.** Fixtures are invented, apart
   from two public projects, dbt's Jaffle Shop and Fivetran's Shopify package
   ([0038](docs/decisions/0038-a-public-example-project-is-a-fixture.md)); point
