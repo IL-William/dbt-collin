@@ -12,14 +12,15 @@ done, so that whoever picks it up needs nothing but this tree.
 
 1. **A column read beside an alias of the same name.** In `country_code as
    country, country as country_name`, collin credits the alias where the SQL
-   reads the table's column: one edge in Shopify. It waits on Snowflake's
-   rule, which its documentation states only for `GROUP BY`, where the
-   column wins. Run `select a as b, b as c from (select 1 as a, 2 as b)` on
-   Snowflake: `c = 2` means the column wins in the select list too. Then, in
-   order: the shape in lineage-library, written to that rule; its mark in
-   `fixtures/lineage-library.known.txt`; the fix, which drops the mark. Done
-   when the mark is gone and the Snowflake project's cache moves only where
-   the SQL says it should.
+   reads the table's column: one edge in Shopify. The column wins, in
+   the select list as in `GROUP BY`: `select a as b, b as c from (select 1
+   as a, 2 as b)` gives `c = 2` on Snowflake and on DuckDB. lineage-library has the shape,
+   `catalogue_entries`, and `fixtures/lineage-library.known.txt` marks its
+   two extra edges. What is left is the fix, a patch to the engine's fork
+   (0028): `resolve_lateral_alias_sources` in `analyzer/select_analyzer.rs`
+   takes any unqualified name an earlier alias has for that alias, without
+   asking whether the `FROM` has the column. Done when the marks are gone
+   and the Snowflake project's cache moves only where the SQL says it should.
 2. **Release 0.7.0**, once it is worth installing (0034). Since 0.6.0 a
    star's `REPLACE` and `ILIKE` are read, which moves no edge of the three
    projects measured here. Best released with the first item.
