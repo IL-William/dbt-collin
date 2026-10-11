@@ -10,24 +10,18 @@ target with that target's environment. Not a decision: a list to come back to.
 In order. Each item says what holds it, where it starts and what shows it
 done, so that whoever picks it up needs nothing but this tree.
 
-1. **Release 0.7.0**, once it is worth installing (0034). Since 0.6.0 a
-   star's `REPLACE` and `ILIKE` are read, which moves no edge of the three
-   projects measured here; a column wins over an alias of its name given
-   before it, which moves one edge of Shopify and none of the Snowflake
-   project; and a star expands in its table's order (0044), which moves none
-   of the three.
-2. **A `PIVOT`'s value columns**, a patch to the engine's fork (0028).
+1. **A `PIVOT`'s value columns**, a patch to the engine's fork (0028).
    lineage-library marks it; no model of the Snowflake project uses one,
    eight of Cal-ITP do.
-3. **Upstreaming the fork's eleven patches** to pondpilot/flowscope, so that the
+2. **Upstreaming the fork's eleven patches** to pondpilot/flowscope, so that the
    pin can go back to a crates.io release (0028). The owner's decision:
    nothing is proposed upstream without it.
-4. **More shapes in lineage-library**: a recursive CTE, a `UNION BY NAME`, a
+3. **More shapes in lineage-library**: a recursive CTE, a `UNION BY NAME`, a
    scalar subquery in a select list, a `MERGE`. Each is written from the SQL
    before collin is run on it.
-5. **A third witness, optionally**: Snowflake's `ACCESS_HISTORY`, read outside
+4. **A third witness, optionally**: Snowflake's `ACCESS_HISTORY`, read outside
    collin, which never reaches a warehouse (0001).
-6. **On hold: BigQuery**, not a priority for now. Its gaps are the engine's
+5. **On hold: BigQuery**, not a priority for now. Its gaps are the engine's
    STRUCT fields, `UNNEST` and `PIVOT` (On public projects, below).
 
 The precision, coverage and audit figures below were measured with the
