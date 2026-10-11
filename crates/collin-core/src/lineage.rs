@@ -3283,7 +3283,9 @@ mod tests {
             want.extend(extra.iter().cloned());
             let tag = |what: &str, l: &String| format!("{name}: {what}  {l}");
             faults.extend(want.difference(&got).map(|l| tag("expected, not given:", l)));
-            faults.extend(got.difference(&want).map(|l| tag("given, not expected:", l)));
+            // A marked line now given is said once, as a mark to drop.
+            let unmarked = got.difference(&want).filter(|l| !missing.contains(*l));
+            faults.extend(unmarked.map(|l| tag("given, not expected:", l)));
             for l in missing.iter().filter(|l| got.contains(*l)) {
                 faults.push(tag("now given, drop the mark:  missing:", l));
             }

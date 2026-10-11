@@ -50,6 +50,9 @@ The patches, in the order they are pinned:
    its columns per node rather than per name.
 8. A `LATERAL FLATTEN`'s `KEY` and `PATH` derive from its input, as `VALUE` and
    `THIS` do: for an object they are part of its content.
+9. The branches of a `UNION`, an `INTERSECT` or an `EXCEPT` pair by position,
+   as SQL pairs them, unless it says `BY NAME`: a later branch's columns take
+   the first branch's names.
 
 When upstream releases a patch, the fork rebases onto that release and drops
 it. When it has released them all, the pin goes back to a crates.io version and
@@ -127,3 +130,12 @@ written in the SQL, the names of the columns each value came from, so the edge
 says which columns the name stands for, as an `UNPIVOT`'s name column would;
 sqlglot reads the same 400. Columns lost in trusted models go from 4 to none.
 Cal-ITP and Shopify do not move.
+
+Moved to the ninth, tagged `collin-engine-4`, found by lineage-library (0042),
+where a second branch naming a column otherwise lost it. The 3507 model
+Snowflake project does not move, cache, `--indirect` and dumps, in either of
+its compiles: no union there names a column differently in two branches. On
+Cal-ITP three models stop being contradicted by the warehouse and are parsed,
+their unions of stars no longer adding twelve columns no table has, and four
+edges and three filter reads arrive. Shopify and Jaffle Shop do not move, and
+lineage-library's one mark goes.

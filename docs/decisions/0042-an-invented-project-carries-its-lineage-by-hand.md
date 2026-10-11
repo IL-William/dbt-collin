@@ -61,8 +61,9 @@ that one the library was right: the engine pairs the branches of a `UNION` by
 name, where SQL pairs them by position, so a second branch writing another
 name loses that column, and at the top level adds one. It is marked
 `missing:`. On the 3507 model project nothing shows it: no union there names
-a column differently in two branches. On the code before 0041 the test fails
-on the three window and `WITHIN GROUP` keys 0041 reads.
+a column differently in two branches. The fork's ninth patch pairs them by
+position (0028), and the mark went with it. On the code before 0041 the test
+fails on the three window and `WITHIN GROUP` keys 0041 reads.
 
 A clone needs `--recurse-submodules`, or `git submodule update --init` after,
 and the workflows that run the tests check the submodule out.
