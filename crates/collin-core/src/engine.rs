@@ -21,6 +21,7 @@ use sqlparser::ast::{
     Expr, Query, SelectItem, SetExpr, SetOperator, Statement, TableFactor, Visit, VisitMut, Visitor, VisitorMut,
     WindowType,
 };
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
@@ -355,7 +356,8 @@ impl Visitor for ScopeNames {
 }
 
 /// How many selects a query body unions, 1 for one that is no union. A
-/// parenthesised query with a `WITH` of its own is one branch.
+/// parenthesised query counts its own, `WITH` or not: the engine keeps the
+/// first branch of a union inside one and drops the rest.
 ///
 /// `usize::MAX` for an `EXCEPT` or an `INTERSECT`, which no count of arrivals
 /// can meet: the engine walks both sides, and a value set on the right never
@@ -366,7 +368,7 @@ fn branches(body: &SetExpr) -> usize {
             branches(left).saturating_add(branches(right))
         }
         SetExpr::SetOperation { .. } => usize::MAX,
-        SetExpr::Query(q) if q.with.is_none() => branches(&q.body),
+        SetExpr::Query(q) => branches(&q.body),
         _ => 1,
     }
 }
@@ -1293,6 +1295,10 @@ struct Graph<'r, 'm> {
     /// See `Scopes::branches`.
     branches: &'m HashMap<String, usize>,
     output_branches: usize,
+    /// For each union scope reached, the arrivals into each of its column
+    /// labels, lower case: counted once a scope rather than once a visit,
+    /// which on a wide union is every column again for each column.
+    arrivals: RefCell<HashMap<&'r str, HashMap<String, usize>>>,
 }
 
 impl<'r> Graph<'r, '_> {
@@ -1438,6 +1444,32 @@ impl<'r> Graph<'r, '_> {
         relations_under(self.by_id, self.feeds, id)
     }
 
+    /// How many times the union scope `scope` reaches its column `label`: once
+    /// for each distinct text hung off a relation or a CTE, and once for each
+    /// column feeding it. See `value_of_column`.
+    fn arrivals_into(&self, scope: &'r str, label: &str) -> usize {
+        let mut known = self.arrivals.borrow_mut();
+        let counts = known.entry(scope).or_insert_with(|| {
+            let mut by_label: HashMap<String, (HashSet<&'r str>, usize)> = HashMap::new();
+            for c in self.owned.get(scope).into_iter().flatten() {
+                let Some(n) = self.by_id.get(c) else { continue };
+                let (literals, columns) = by_label.entry(n.label.to_lowercase()).or_default();
+                for (from, _, text) in self.feeds.get(c).into_iter().flatten() {
+                    let text = text.map(str::trim).filter(|t| !t.is_empty());
+                    match (self.by_id.get(from).map(|n| n.node_type), text) {
+                        (Some(NodeType::Column), _) => *columns += 1,
+                        (_, Some(text)) => {
+                            literals.insert(text);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            by_label.into_iter().map(|(label, (literals, columns))| (label, literals.len() + columns)).collect()
+        });
+        counts.get(label).copied().unwrap_or(0)
+    }
+
     /// A column already found to be a root, from the output nodes behind it,
     /// with the value the SQL gives it. See `Root`.
     fn root(&self, column: &str, nodes: &[&'r str]) -> Root {
@@ -1488,24 +1520,8 @@ impl<'r> Graph<'r, '_> {
                 NodeType::Output => self.output_branches,
                 _ => self.branches.get(&scope.label.trim_matches(&QUOTES[..]).to_lowercase()).copied().unwrap_or(1),
             };
-            if branches > 1 {
-                let mut literals: HashSet<&str> = HashSet::new();
-                let mut columns = 0usize;
-                let same = self.owned.get(o).into_iter().flatten().filter(|c| {
-                    self.by_id.get(*c).is_some_and(|n| n.label.eq_ignore_ascii_case(&node.label))
-                });
-                for (from, _, text) in same.flat_map(|c| self.feeds.get(c).into_iter().flatten()) {
-                    match (self.by_id.get(from).map(|n| n.node_type), said(*text)) {
-                        (Some(NodeType::Column), _) => columns += 1,
-                        (_, Some(text)) => {
-                            literals.insert(text);
-                        }
-                        _ => {}
-                    }
-                }
-                if literals.len() + columns < branches {
-                    return false;
-                }
+            if branches > 1 && self.arrivals_into(o, &node.label.to_lowercase()) < branches {
+                return false;
             }
         }
         let ups = self.feeds.get(id).map(Vec::as_slice).unwrap_or_default();
@@ -2473,6 +2489,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         flattens: &flattens,
         branches: &branches,
         output_branches,
+        arrivals: RefCell::default(),
     };
     // Lost is measured against the engine's own edges. A column fed only by the
     // model's own relation counts as fed here although the pass drops that edge:
@@ -2941,6 +2958,9 @@ mod tests {
             "select 'web' as channel, id from db.sch.a union all select 'shop' as channel, id from db.sch.b",
             "with u as (select id, 'web' as channel from db.sch.a union all select id, 'shop' from db.sch.b) \
              select * from u",
+            // A branch in parentheses with a `WITH` of its own is still one.
+            "select 'web' as channel, id from db.sch.a \
+             union all (with w as (select 1 as one) select 'shop' as channel, id from db.sch.b)",
         ] {
             let r = resolve(sql, "snowflake", &[vis("DB.SCH.A", &["id"]), vis("DB.SCH.B", &["id"])]);
             assert_eq!(root_values(&r), vec![("channel", Some(vec!["'shop'", "'web'"]))], "{sql}");
@@ -2986,6 +3006,20 @@ mod tests {
                 "snowflake",
                 "with u as (select 'a' as x from db.sch.a union all select 'b' from db.sch.b), \
                  v as (select x from u union all select 'c') select x from v",
+            ),
+            (
+                "snowflake",
+                "select 'a' as x from db.sch.a union all (with w as (select 1 as one) \
+                 select 'b' from db.sch.b union all select 'c' from db.sch.a)",
+            ),
+            (
+                "snowflake",
+                "with u as ((with w as (select 1 as one) select 'a' as x from db.sch.a \
+                 union all select 'b' from db.sch.b, db.sch.a union all select 'c')) select x from u",
+            ),
+            (
+                "snowflake",
+                "(with w as (select 1 as one) select 'a' as x from db.sch.a, db.sch.b union all select 'c')",
             ),
         ] {
             let r = resolve(sql, dialect, &tables);
