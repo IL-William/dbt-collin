@@ -55,8 +55,8 @@ diff -r /tmp/collin/before/dump $O/dump                     # what the engine sa
   each parent with the columns the engine was handed and where they came from,
   the outputs and roots, every edge the engine gave with its expression whether
   or not it was published, the indirect reads, the issues, the agreement, the
-  plan the pass chose, the compiled file the SQL came from, and the edges the
-  model put in the cache as they were written. The pass hands it all of this.
+  plan the pass chose, the compiled file the SQL came from, and the edges and
+  the roots the model put in the cache as they were written. The pass hands it all of this.
   Where an edge comes from and what role it plays are shown only as the pass
   published them, never worked out again, so the dump cannot describe an older
   pass.

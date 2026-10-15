@@ -18,9 +18,10 @@ use flowscope_core::types::{
     NodeType, SchemaMetadata, SchemaTable, Severity,
 };
 use sqlparser::ast::{
-    Expr, Query, SelectItem, SetExpr, Statement, TableFactor, Visit, VisitMut, Visitor, VisitorMut,
+    Expr, Query, SelectItem, SetExpr, SetOperator, Statement, TableFactor, Visit, VisitMut, Visitor, VisitorMut,
     WindowType,
 };
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
@@ -156,7 +157,8 @@ pub struct Resolved {
     /// Kept apart from the columns that simply came out with no lineage. A root
     /// has no parent to find, so counting it as a gap makes coverage read lower
     /// than the truth and sends a reader looking for something that is not there.
-    pub roots: Vec<String>,
+    /// Sorted by column.
+    pub roots: Vec<Root>,
     /// Output columns no edge reaches that are no root either: the lineage the
     /// SQL has and the engine lost, each with where the walk back stopped.
     /// Sorted by column.
@@ -243,6 +245,26 @@ pub struct MergedScope {
     pub count: usize,
 }
 
+/// An output column built from no column, and the value the SQL sets it to.
+///
+/// A root has no parent, so without its value a reader tracing a column back
+/// arrives at a name and nothing more: `current_timestamp()` and a source's
+/// own column would look the same (0045).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Root {
+    pub column: String,
+    /// The literal at the end of each path back from the output that only
+    /// copies, renames or casts it, sorted, each once: one for each branch of
+    /// a union that sets it differently, and the literal where it is set,
+    /// however many CTEs copy it out.
+    pub expressions: Vec<String>,
+    /// Every path back is one such path. Not when something on the way does
+    /// more than cast, as a date spine's arithmetic does, when the engine read
+    /// a union in part, or when the SQL writes no expression, as for a column
+    /// of a `VALUES` list: `expressions` is then not the whole value.
+    pub complete: bool,
+}
+
 /// An output column that came out with no edge and is not built from literals.
 pub struct Lost {
     pub column: String,
@@ -284,6 +306,9 @@ struct ScopeNames {
     /// Lower case names of the `LATERAL FLATTEN` calls, `flatten` for one with
     /// no alias, as the engine labels it.
     flattens: Vec<String>,
+    /// Lower case names of the scopes whose body is a union, with its branches.
+    /// See `Scopes::branches`.
+    unions: Vec<(String, usize)>,
 }
 
 impl Visitor for ScopeNames {
@@ -294,6 +319,9 @@ impl Visitor for ScopeNames {
             for cte in &with.cte_tables {
                 let name = cte.alias.name.to_string();
                 self.stars.push((name.trim_matches('"').to_lowercase(), star_sources(&cte.query)));
+                if branches(&cte.query.body) > 1 {
+                    self.unions.push((name.trim_matches(&QUOTES[..]).to_lowercase(), branches(&cte.query.body)));
+                }
                 self.ctes.push(name);
             }
         }
@@ -312,6 +340,11 @@ impl Visitor for ScopeNames {
                 let label = alias.as_ref().map(|a| a.name.to_string());
                 self.values.push(label.map_or("(derived)".into(), |l| l.trim_matches('"').to_lowercase()));
             }
+            if branches(&subquery.body) > 1 {
+                // One with no alias under the label the engine gives it.
+                let label = alias.as_ref().map_or("(derived)".into(), |a| a.name.to_string());
+                self.unions.push((label.trim_matches(&QUOTES[..]).to_lowercase(), branches(&subquery.body)));
+            }
             if let Some(alias) = alias {
                 let name = alias.name.to_string();
                 self.stars.push((name.trim_matches('"').to_lowercase(), star_sources(subquery)));
@@ -319,6 +352,24 @@ impl Visitor for ScopeNames {
             }
         }
         ControlFlow::Continue(())
+    }
+}
+
+/// How many selects a query body unions, 1 for one that is no union. A
+/// parenthesised query counts its own, `WITH` or not: the engine keeps the
+/// first branch of a union inside one and drops the rest.
+///
+/// `usize::MAX` for an `EXCEPT` or an `INTERSECT`, which no count of arrivals
+/// can meet: the engine walks both sides, and a value set on the right never
+/// comes out of an `EXCEPT`.
+fn branches(body: &SetExpr) -> usize {
+    match body {
+        SetExpr::SetOperation { op: SetOperator::Union, left, right, .. } => {
+            branches(left).saturating_add(branches(right))
+        }
+        SetExpr::SetOperation { .. } => usize::MAX,
+        SetExpr::Query(q) => branches(&q.body),
+        _ => 1,
     }
 }
 
@@ -786,6 +837,12 @@ struct Scopes {
     values: HashSet<String>,
     /// Lower case names of the `LATERAL FLATTEN` calls.
     flattens: HashSet<String>,
+    /// Lower case names of the CTEs and derived tables whose body is a union,
+    /// with how many branches it has, and the same count for the statement's
+    /// own body, 1 when it is no union. The engine can drop a branch without a
+    /// word, so the count is what says a value set there was read whole.
+    branches: HashMap<String, usize>,
+    output_branches: usize,
     qualifies: Vec<Qualify>,
     joins: Vec<JoinKeys>,
     predicates: Vec<Predicate>,
@@ -815,6 +872,13 @@ fn scopes(sql: &str, dialect: Dialect) -> Scopes {
         out.predicates.extend(read.predicates);
         if let Statement::Query(query) = statement {
             orderings(query, None, &mut out.orderings);
+            out.output_branches = out.output_branches.max(branches(&query.body));
+        }
+        // A name several scopes share counts the largest union among them:
+        // the column cannot say which scope it is, and too many branches only
+        // ever leaves a value unsaid.
+        for (name, count) in &names.unions {
+            out.branches.entry(name.clone()).and_modify(|c| *c = (*c).max(*count)).or_insert(*count);
         }
         let ctes: HashSet<String> =
             names.ctes.iter().map(|c| c.trim_matches('"').to_lowercase()).collect();
@@ -1228,6 +1292,13 @@ struct Graph<'r, 'm> {
     star_over_relation: &'m HashSet<String>,
     values: &'m HashSet<String>,
     flattens: &'m HashSet<String>,
+    /// See `Scopes::branches`.
+    branches: &'m HashMap<String, usize>,
+    output_branches: usize,
+    /// For each union scope reached, the arrivals into each of its column
+    /// labels, lower case: counted once a scope rather than once a visit,
+    /// which on a wide union is every column again for each column.
+    arrivals: RefCell<HashMap<&'r str, HashMap<String, usize>>>,
 }
 
 impl<'r> Graph<'r, '_> {
@@ -1371,6 +1442,139 @@ impl<'r> Graph<'r, '_> {
 impl<'r> Graph<'r, '_> {
     fn relations_under(&self, id: &'r str) -> Vec<String> {
         relations_under(self.by_id, self.feeds, id)
+    }
+
+    /// How many times the union scope `scope` reaches its column `label`: once
+    /// for each distinct text hung off a relation or a CTE, and once for each
+    /// column feeding it. See `value_of_column`.
+    fn arrivals_into(&self, scope: &'r str, label: &str) -> usize {
+        let mut known = self.arrivals.borrow_mut();
+        let counts = known.entry(scope).or_insert_with(|| {
+            let mut by_label: HashMap<String, (HashSet<&'r str>, usize)> = HashMap::new();
+            for c in self.owned.get(scope).into_iter().flatten() {
+                let Some(n) = self.by_id.get(c) else { continue };
+                let (literals, columns) = by_label.entry(n.label.to_lowercase()).or_default();
+                for (from, _, text) in self.feeds.get(c).into_iter().flatten() {
+                    let text = text.map(str::trim).filter(|t| !t.is_empty());
+                    match (self.by_id.get(from).map(|n| n.node_type), text) {
+                        (Some(NodeType::Column), _) => *columns += 1,
+                        (_, Some(text)) => {
+                            literals.insert(text);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            by_label.into_iter().map(|(label, (literals, columns))| (label, literals.len() + columns)).collect()
+        });
+        counts.get(label).copied().unwrap_or(0)
+    }
+
+    /// A column already found to be a root, from the output nodes behind it,
+    /// with the value the SQL gives it. See `Root`.
+    fn root(&self, column: &str, nodes: &[&'r str]) -> Root {
+        let mut expressions = Vec::new();
+        let mut seen = HashMap::new();
+        let mut complete = !nodes.is_empty();
+        for id in nodes {
+            complete &= self.value_of(id, &mut seen, &mut expressions);
+        }
+        expressions.sort();
+        expressions.dedup();
+        Root { column: column.to_string(), expressions, complete }
+    }
+
+    /// Pushes the text of each literal reaching the column `id` along a path
+    /// that only copies, renames or casts it, and says whether every path into
+    /// it is one.
+    ///
+    /// Where a union feeds a column, its own expression is the first branch's
+    /// alone, so the texts are read off the edges into it, one for each branch,
+    /// and its expression only where nothing feeds it.
+    fn value_of(&self, id: &'r str, seen: &mut HashMap<&'r str, Option<bool>>, out: &mut Vec<String>) -> bool {
+        match seen.get(id) {
+            Some(Some(told)) => return *told,
+            // A loop, which reached no literal on the way round.
+            Some(None) => return false,
+            None => {}
+        }
+        seen.insert(id, None);
+        let told = self.value_of_column(id, seen, out);
+        seen.insert(id, Some(told));
+        told
+    }
+
+    fn value_of_column(&self, id: &'r str, seen: &mut HashMap<&'r str, Option<bool>>, out: &mut Vec<String>) -> bool {
+        let said = |t: Option<&'r str>| t.map(str::trim).filter(|t| !t.is_empty());
+        let Some(node) = self.by_id.get(id).filter(|n| n.node_type == NodeType::Column) else { return false };
+        // A union reaches its column once for each branch, through one node or
+        // through one node a branch. Fewer arrivals and the engine dropped a
+        // branch, as it drops a `SELECT` with no `FROM` and a literal it has
+        // nothing to hang off, so what it shows is not all of it.
+        //
+        // A literal arrives once for each text, not for each edge: the engine
+        // hangs one branch's literal off every relation that branch reads, a
+        // comma join or a `FLATTEN`, which would count it twice.
+        if let Some((o, scope)) = self.owner.get(id).and_then(|o| self.by_id.get(o).map(|n| (*o, n))) {
+            let branches = match scope.node_type {
+                NodeType::Output => self.output_branches,
+                _ => self.branches.get(&scope.label.trim_matches(&QUOTES[..]).to_lowercase()).copied().unwrap_or(1),
+            };
+            if branches > 1 && self.arrivals_into(o, &node.label.to_lowercase()) < branches {
+                return false;
+            }
+        }
+        let ups = self.feeds.get(id).map(Vec::as_slice).unwrap_or_default();
+        // A text reading a name the engine never placed is no literal, whatever
+        // the walk found below it: the guard of 0016, which a root its own text
+        // settles never went through.
+        let literal = |text: &str| read_names(text, self.vocabulary, self.tables).is_empty();
+        if ups.is_empty() {
+            // Nothing feeds it: its own expression is the literal.
+            return match said(node.expression.as_deref()).filter(|t| literal(t)) {
+                Some(text) => {
+                    out.push(text.to_string());
+                    true
+                }
+                None => false,
+            };
+        }
+        let mut told = true;
+        for (from, _, text) in ups {
+            let Some(below) = self.by_id.get(from) else { return false };
+            told &= match (said(*text), below.node_type == NodeType::Column) {
+                // Hung off a relation or a CTE: the literal itself, if it reads
+                // none of the columns it hangs off.
+                (Some(text), false) => {
+                    // A relation whose columns nobody knows cannot say the
+                    // text names none of them.
+                    let names_none = if below.node_type.is_table_or_view() {
+                        let known = owning_relation(below).and_then(|r| self.known.get(&r));
+                        known.is_some_and(|columns| columns_named_in(text, columns).is_empty())
+                    } else {
+                        let cols = self.owned.get(from).into_iter().flatten();
+                        let columns: HashSet<String> =
+                            cols.filter_map(|c| self.by_id.get(c)).map(|n| n.label.to_lowercase()).collect();
+                        columns_named_in(text, &columns).is_empty()
+                    };
+                    let bare = names_none && literal(text);
+                    if bare {
+                        out.push(text.to_string());
+                    }
+                    bare
+                }
+                // An expression over the column below: the value goes on
+                // through it only if it does no more than cast it.
+                (Some(text), true) => {
+                    let role = crate::role::classify(text, &below.label, &node.label);
+                    matches!(role, crate::role::Role::Passthrough | crate::role::Role::Rename | crate::role::Role::Cast)
+                        && self.value_of(from, seen, out)
+                }
+                (None, true) => self.value_of(from, seen, out),
+                (None, false) => false,
+            };
+        }
+        told
     }
 }
 
@@ -1695,7 +1899,18 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         });
         return out;
     }
-    let Scopes { merged, star_over_relation, values, flattens, qualifies, joins, predicates, orderings } =
+    let Scopes {
+        merged,
+        star_over_relation,
+        values,
+        flattens,
+        branches,
+        output_branches,
+        qualifies,
+        joins,
+        predicates,
+        orderings,
+    } =
         scopes(sql, split_dialect(adapter));
     out.merged_scopes = merged;
 
@@ -2272,6 +2487,9 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         star_over_relation: &star_over_relation,
         values: &values,
         flattens: &flattens,
+        branches: &branches,
+        output_branches,
+        arrivals: RefCell::default(),
     };
     // Lost is measured against the engine's own edges. A column fed only by the
     // model's own relation counts as fed here although the pass drops that edge:
@@ -2281,20 +2499,21 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
             Some(text) if !text.trim().is_empty() => columns_named_in(text, &anywhere).is_empty(),
             _ => false,
         };
+        let nodes = nodes_of.get(c.as_str()).map(Vec::as_slice).unwrap_or_default();
         if named {
-            out.roots.push(c.clone());
+            out.roots.push(graph.root(c, nodes));
             continue;
         }
         let mut ends = Ends::default();
         let mut literal = true;
-        for id in nodes_of.get(c.as_str()).into_iter().flatten() {
+        for id in nodes {
             let text = by_id.get(id).and_then(|n| n.expression.as_deref());
             let found = graph.ends(id, text, &mut HashMap::new());
             literal &= found.only_literals();
             ends.absorb(found);
         }
         if literal && ends.literal > 0 {
-            out.roots.push(c.clone());
+            out.roots.push(graph.root(c, nodes));
         } else {
             out.lost.push(Lost { column: c.clone(), ends: ends.reasons() });
         }
@@ -2302,7 +2521,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
 
     out.projection = out.outputs.clone();
     out.outputs.sort();
-    out.roots.sort();
+    out.roots.sort_by(|a, b| a.column.cmp(&b.column));
     out.lost.sort_by(|a, b| a.column.cmp(&b.column));
     out.unbacked.sort_by(|a, b| (&a.output, &a.cte, &a.column).cmp(&(&b.output, &b.cte, &b.column)));
     out.edges.sort_by(|a, b| {
@@ -2315,6 +2534,10 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn root_columns(r: &Resolved) -> Vec<&str> {
+        r.roots.iter().map(|root| root.column.as_str()).collect()
+    }
 
     fn vis(rel: &str, cols: &[&str]) -> Visible {
         Visible {
@@ -2646,7 +2869,7 @@ mod tests {
             "snowflake",
             &[vis("DB.SCH.ORDERS", &["id", "amount"])],
         );
-        assert_eq!(r.roots, vec!["note"]);
+        assert_eq!(root_columns(&r), vec!["note"]);
         assert!(r.edges.iter().all(|e| e.to_column != "note"));
     }
 
@@ -2681,11 +2904,146 @@ mod tests {
             "snowflake",
             &[vis("DB.SCH.SRC", &["id", "code", "amount"])],
         );
-        assert_eq!(r.roots, vec!["loaded_at", "origin"]);
+        assert_eq!(root_columns(&r), vec!["loaded_at", "origin"]);
         assert!(r.lost.is_empty(), "a root is never also lost");
         let edges: Vec<(&str, &str)> =
             r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
         assert_eq!(edges, vec![("id", "id")]);
+    }
+
+    /// Each root of `r` with the value its expressions give it, `None` where
+    /// the engine could not say it whole.
+    fn root_values(r: &Resolved) -> Vec<(&str, Option<Vec<&str>>)> {
+        r.roots
+            .iter()
+            .map(|root| {
+                let told = root.complete.then(|| root.expressions.iter().map(String::as_str).collect());
+                (root.column.as_str(), told)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_root_says_the_literal_it_is_set_to_wherever_that_is_set() {
+        // Set two CTEs up and copied out by name and through a star: the copy
+        // carries no text, so the value is read where it is set.
+        let r = resolve(
+            "with base as (select id, 'LEDGER' as origin, current_timestamp() as loaded_at \
+             from db.sch.src), final as (select * from base) select id, origin, loaded_at as booked_at from final",
+            "snowflake",
+            &[vis("DB.SCH.SRC", &["id", "code"])],
+        );
+        assert_eq!(
+            root_values(&r),
+            vec![("booked_at", Some(vec!["current_timestamp()"])), ("origin", Some(vec!["'LEDGER'"]))]
+        );
+    }
+
+    #[test]
+    fn a_root_cast_on_the_way_out_keeps_its_literal() {
+        // A package that fills a column its source lacks with a typed null, then
+        // casts every column once more on the way out: the null is the news.
+        let r = resolve(
+            "with filled as (select id, cast(null as varchar) as coupon from db.sch.src) \
+             select id, cast(coupon as varchar) as coupon, upper(coupon) as shout from filled",
+            "snowflake",
+            &[vis("DB.SCH.SRC", &["id"])],
+        );
+        assert_eq!(root_values(&r), vec![("coupon", Some(vec!["CAST(NULL AS VARCHAR)"])), ("shout", None)]);
+    }
+
+    #[test]
+    fn a_root_set_in_each_branch_of_a_union_says_every_branch() {
+        for sql in [
+            "select 'web' as channel, id from db.sch.a union all select 'shop' as channel, id from db.sch.b",
+            "with u as (select id, 'web' as channel from db.sch.a union all select id, 'shop' from db.sch.b) \
+             select * from u",
+            // A branch in parentheses with a `WITH` of its own is still one.
+            "select 'web' as channel, id from db.sch.a \
+             union all (with w as (select 1 as one) select 'shop' as channel, id from db.sch.b)",
+        ] {
+            let r = resolve(sql, "snowflake", &[vis("DB.SCH.A", &["id"]), vis("DB.SCH.B", &["id"])]);
+            assert_eq!(root_values(&r), vec![("channel", Some(vec!["'shop'", "'web'"]))], "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_union_the_engine_read_in_part_tells_no_value() {
+        // The engine keeps the first branch of a union of selects with no FROM
+        // and drops the rest without a word: `'B'` is in no node of its graph.
+        // A list of one would say the column only ever holds `'A'`.
+        //
+        // It also hangs one branch's literal off every relation a branch reads,
+        // so two arrivals can be one branch twice: a branch is counted once
+        // for each text, not once for each edge. A name several scopes share
+        // counts the largest union among them, and a set operation that is no
+        // union, whose right side never comes out, is not read as one.
+        let tables = [vis("DB.SCH.A", &["id", "arr"]), vis("DB.SCH.B", &["id"])];
+        let mut said = Vec::new();
+        for (dialect, sql) in [
+            ("snowflake", "select 'A' as grade union all select 'B'"),
+            ("snowflake", "with g as (select 'A' as grade union all select 'B' as grade) select grade from g"),
+            ("snowflake", "with spine as (select 0 as n union all select 1) select n from spine"),
+            ("snowflake", "select 'k' as kind from db.sch.a a, lateral flatten(input => a.arr) f union all select 'm'"),
+            (
+                "snowflake",
+                "with u as (select 'k' as kind from db.sch.a a, lateral flatten(input => a.arr) f \
+                 union all select 'm') select kind from u",
+            ),
+            ("duckdb", "select 'k' as kind from db.sch.a a, unnest(a.arr) as t(v) union all select 'm'"),
+            ("snowflake", "select 'k' as kind from db.sch.a a, db.sch.b b union all select 'm' from db.sch.b"),
+            (
+                "snowflake",
+                "select k from (with c as (select 'a' as k from db.sch.a union all select 'b' from db.sch.b \
+                 union all select 'c') select k from c) s1 cross join (with c as (select 1 as n from db.sch.a \
+                 union all select 2 from db.sch.b) select n from c) s2",
+            ),
+            ("bigquery", "with `u` as (select 'A' as grade union all select 'B' as grade) select grade from `u`"),
+            ("snowflake", "select x from (select 'a' as x union all select 'b')"),
+            ("snowflake", "select 'web' as channel from db.sch.a except select 'shop' from db.sch.b"),
+            ("snowflake", "select 'web' as channel from db.sch.a intersect select 'shop' from db.sch.b"),
+            (
+                "snowflake",
+                "with u as (select 'a' as x from db.sch.a union all select 'b' from db.sch.b), \
+                 v as (select x from u union all select 'c') select x from v",
+            ),
+            (
+                "snowflake",
+                "select 'a' as x from db.sch.a union all (with w as (select 1 as one) \
+                 select 'b' from db.sch.b union all select 'c' from db.sch.a)",
+            ),
+            (
+                "snowflake",
+                "with u as ((with w as (select 1 as one) select 'a' as x from db.sch.a \
+                 union all select 'b' from db.sch.b, db.sch.a union all select 'c')) select x from u",
+            ),
+            (
+                "snowflake",
+                "(with w as (select 1 as one) select 'a' as x from db.sch.a, db.sch.b union all select 'c')",
+            ),
+        ] {
+            let r = resolve(sql, dialect, &tables);
+            if r.roots.is_empty() || r.roots.iter().any(|root| root.complete) {
+                said.push(format!("{sql}: {:?}", r.roots));
+            }
+        }
+        assert!(said.is_empty(), "{}", said.join("\n"));
+    }
+
+    #[test]
+    fn a_root_computed_from_literals_tells_no_value() {
+        // A date spine's date is an expression over the numbers below it, so no
+        // literal is its value, and the first text on the way would read a
+        // name of the CTE as if it were a column.
+        let r = resolve(
+            "with nums as (select seq4() as n from table(generator(rowcount => 10))) \
+             select dateadd(day, n, '2020-01-01'::date) as day_on from nums",
+            "snowflake",
+            &[],
+        );
+        assert_eq!(root_values(&r), vec![("day_on", None)]);
+        let r = resolve("select column1 as a from values (1), (2)", "snowflake", &[]);
+        assert_eq!(root_values(&r), vec![("a", None)]);
     }
 
     #[test]
@@ -2699,7 +3057,7 @@ mod tests {
             "snowflake",
             &[],
         );
-        assert_eq!(r.roots, vec!["day_start", "yr"]);
+        assert_eq!(root_columns(&r), vec!["day_start", "yr"]);
     }
 
     #[test]
@@ -2718,7 +3076,7 @@ mod tests {
             "snowflake",
             &[vis("DB.SCH.A", &["id"]), vis("DB.SCH.B", &["id"])],
         );
-        assert_eq!(r.roots, vec!["amount", "note"]);
+        assert_eq!(root_columns(&r), vec!["amount", "note"]);
         assert!(r.lost.is_empty(), "{:?}", r.lost.iter().map(|l| &l.column).collect::<Vec<_>>());
     }
 
@@ -2726,7 +3084,7 @@ mod tests {
     fn a_read_the_engine_cannot_place_is_not_a_root() {
         // The walk from `code` ends where it does for a literal, and the text
         // still reads `code`, which the walk never reached.
-        assert_eq!(unplaced_code().roots, vec!["ccy"]);
+        assert_eq!(root_columns(&unplaced_code()), vec!["ccy"]);
     }
 
     #[test]
@@ -3110,7 +3468,7 @@ mod tests {
             ("select a from (values (1), (2)) as v(a)", vec!["a"]),
         ] {
             let r = resolve(sql, "snowflake", &[]);
-            assert_eq!(r.roots, roots, "{sql}");
+            assert_eq!(root_columns(&r), roots, "{sql}");
             assert!(r.lost.is_empty(), "{sql}");
         }
         // A derived table that is not one, missing the name, is still a loss.
@@ -3148,7 +3506,7 @@ mod tests {
             r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
         edges.sort();
         assert_eq!(edges, vec![("data", "element_name"), ("data", "element_value")]);
-        assert_eq!(r.roots, vec!["position"]);
+        assert_eq!(root_columns(&r), vec!["position"]);
         assert!(r.lost.is_empty());
     }
 

@@ -7,7 +7,8 @@
 //! SQL reads, the outputs and the roots, every edge with its expression, the
 //! join, filter and dedup keys, the issues, the agreement and the plan the pass
 //! chose, and the compiled file the SQL came from when the manifest had none.
-//! Next to it, the edges the model put in the cache, as they were written.
+//! Next to it, the edges and the roots the model put in the cache, as they were
+//! written.
 //!
 //! It watches `lineage::run_observed` rather than replaying the pass. Where an
 //! edge comes from and what role it plays are the pass's decisions, so they are
@@ -203,7 +204,8 @@ fn describe(seen: &Seen) -> Value {
         "parse_error": r.parse_error,
         "approximate": r.approximate,
         "outputs": r.outputs,
-        "roots": r.roots,
+        // Names only, as the tools read them; the text is on `published_roots`.
+        "roots": r.roots.iter().map(|root| &root.column).collect::<Vec<_>>(),
         "lost_outputs": lost,
         "lost_ends": lost_ends,
         "unbacked": r.unbacked.iter().map(|u| json!({"output": u.output, "cte": u.cte, "column": u.column, "owners": u.owners})).collect::<Vec<_>>(),
@@ -218,5 +220,6 @@ fn describe(seen: &Seen) -> Value {
         "issues": issues,
         "published": seen.published,
         "published_indirect": seen.published_indirect,
+        "published_roots": seen.published_roots,
     })
 }
