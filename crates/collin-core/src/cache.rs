@@ -7,6 +7,10 @@
 //!
 //! `from` is a dbt unique_id, or `rel:<db.schema.object>` for a relation dbt
 //! does not own. That escape hatch is part of the format already.
+//!
+//! A column the SQL builds from no column is no edge, having no parent. It goes
+//! in `roots` with the value the SQL sets it to, so that a reader tracing a
+//! column back can tell `current_timestamp()` from a source's own column (0045).
 
 use serde::Serialize;
 
@@ -38,6 +42,11 @@ pub struct Cache {
     pub target: String,
     pub generated_at: String,
     pub edges: Vec<Edge>,
+    /// Beside the edges and never among them: an edge from nowhere would count
+    /// as lineage wherever edges are counted. Left out when empty, and a reader
+    /// that does not know the field skips it, as it does `producer`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<Root>,
 }
 
 #[derive(Serialize)]
@@ -51,9 +60,22 @@ pub struct Edge {
     pub kind: String,
 }
 
+/// A column of a model built from no column, as `'web' as channel` is.
+#[derive(Serialize)]
+pub struct Root {
+    /// The model's unique_id.
+    pub node: String,
+    pub column: String,
+    /// The literal it is set to, as the engine prints it, one for each branch
+    /// of a union that sets it differently, sorted. Empty unless that is the
+    /// whole value: something on the way does more than cast it, the engine
+    /// read a union in part, or the SQL writes no expression.
+    pub expressions: Vec<String>,
+}
+
 impl Cache {
-    pub fn new(target: String, edges: Vec<Edge>) -> Cache {
-        Cache { version: VERSION, source: SOURCE.into(), producer: producer(), target, generated_at: now(), edges }
+    pub fn new(target: String, edges: Vec<Edge>, roots: Vec<Root>) -> Cache {
+        Cache { version: VERSION, source: SOURCE.into(), producer: producer(), target, generated_at: now(), edges, roots }
     }
 
     pub fn write(&self, path: &std::path::Path) -> Result<(), String> {
@@ -122,9 +144,10 @@ mod tests {
 
     #[test]
     fn a_cache_names_what_produced_it() {
-        let c = Cache::new("dev".into(), Vec::new());
+        let c = Cache::new("dev".into(), Vec::new(), Vec::new());
         let text = serde_json::to_string(&c).unwrap();
         assert!(text.contains("\"source\":\"collin\""), "{text}");
+        assert!(!text.contains("roots"), "a cache with no root reads as before: {text}");
         assert!(text.contains("\"version\":1"), "{text}");
         let producer = format!("\"producer\":\"collin {}\"", env!("CARGO_PKG_VERSION"));
         assert!(text.contains(&producer), "{text}");

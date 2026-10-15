@@ -109,6 +109,8 @@ pub struct Run {
     /// In cache order: models parent first, and within a model the direct
     /// edges before the indirect ones.
     pub edges: Vec<cache::Edge>,
+    /// In the same order, and within a model by column.
+    pub roots: Vec<cache::Root>,
     pub report: Report,
 }
 
@@ -153,6 +155,8 @@ pub struct Seen<'a> {
     pub published: &'a [cache::Edge],
     /// The indirect edges written after them, empty unless the run asked.
     pub published_indirect: &'a [cache::Edge],
+    /// The roots this model put in the cache, as written.
+    pub published_roots: &'a [cache::Root],
 }
 
 /// The dbt unique_id behind a relation a model reads, or the `rel:` escape
@@ -173,10 +177,10 @@ fn node_for(project: &Project, read: &HashMap<String, Option<String>>, relation:
 
 pub fn generate(opts: &Options) -> Result<Outcome, String> {
     let Loaded { project, warehouse, catalog_elsewhere } = load(opts)?;
-    let Run { edges, mut report } = run(&project, warehouse, opts);
+    let Run { edges, roots, mut report } = run(&project, warehouse, opts);
     report.set_catalog_elsewhere(catalog_elsewhere);
     report.findings = crate::findings::of(&report);
-    Cache::new(opts.target.clone(), edges).write(&opts.out)?;
+    Cache::new(opts.target.clone(), edges, roots).write(&opts.out)?;
     report.write(&opts.report)?;
     Ok(Outcome {
         totals: report.totals,
@@ -228,6 +232,7 @@ pub fn run_observed(
     let mut store = Store::new(declared, warehouse);
 
     let mut edges: Vec<cache::Edge> = Vec::new();
+    let mut roots: Vec<cache::Root> = Vec::new();
     // What each model's compile produced, kept past a retraction: a child's
     // read of a column its parent's list lacks is explained if the parent's own
     // compile has it.
@@ -376,6 +381,7 @@ pub fn run_observed(
             store: &store,
             published: &published.edges[..published.direct],
             published_indirect: &published.edges[published.direct..],
+            published_roots: &published.roots,
         });
         for a in &published.ambiguous {
             match a.by {
@@ -407,18 +413,18 @@ pub fn run_observed(
         // the denominator: a column built from a literal has no parent, so
         // counting it as a miss would understate coverage and send a reader
         // looking for something the SQL says is not there.
-        let roots: HashSet<&str> = resolved.roots.iter().map(String::as_str).collect();
+        let root: HashSet<&str> = resolved.roots.iter().map(|r| r.column.as_str()).collect();
         let own_only = |c: &&String| {
-            reads_only_itself && !roots.contains(c.as_str()) && !produced.contains(c.as_str())
+            reads_only_itself && !root.contains(c.as_str()) && !produced.contains(c.as_str())
         };
         if let Some(independent) = store.warehouse(&model.uid).or_else(|| store.declared(&model.uid))
         {
-            let judged = independent.iter().filter(|c| !roots.contains(c.as_str()) && !own_only(c));
+            let judged = independent.iter().filter(|c| !root.contains(c.as_str()) && !own_only(c));
             rep.totals.columns_total_independent += judged.clone().count();
             rep.totals.columns_covered_independent +=
                 judged.filter(|c| produced.contains(c.as_str())).count();
             rep.totals.columns_root +=
-                independent.iter().filter(|c| roots.contains(c.as_str())).count();
+                independent.iter().filter(|c| root.contains(c.as_str())).count();
             rep.totals.columns_self += independent.iter().filter(own_only).count();
         }
 
@@ -641,6 +647,7 @@ pub fn run_observed(
         }
 
         edges.extend(published.edges);
+        roots.extend(published.roots);
     }
 
     for (parent, reads) in downstream {
@@ -669,7 +676,7 @@ pub fn run_observed(
     }
     rep.models.sort_by(|a, b| a.name.cmp(&b.name));
     rep.row_deciding_reads.sort_by(|a, b| a.name.cmp(&b.name));
-    Run { edges, report: rep }
+    Run { edges, roots, report: rep }
 }
 
 /// A name a compile reads through a `select *` over one relation whose list
@@ -765,7 +772,7 @@ fn read_through_star(
         f.published = new.iter().any(|e| e.from_relation == f.relation && e.from_column == f.column);
     }
     let fed: HashSet<String> = new.iter().map(|e| e.to_column.clone()).collect();
-    resolved.roots.retain(|r| !fed.contains(r));
+    resolved.roots.retain(|r| !fed.contains(&r.column));
     resolved.lost.retain(|l| !fed.contains(&l.column));
     resolved.edges.extend(new);
     found
@@ -997,6 +1004,7 @@ struct Published {
     bridged: HashSet<String>,
     /// Inferred columns several parents could have given.
     ambiguous: Vec<Ambiguity>,
+    roots: Vec<cache::Root>,
 }
 
 impl Published {
@@ -1079,7 +1087,31 @@ fn publish(
         let fanned = fan_out(project, &read, model, &resolved.indirect, &outputs, &edges);
         edges.extend(fanned);
     }
-    Published { plan, edges, direct, inferred, bridged, ambiguous }
+    // A root is the SQL's word, so it goes out where the edges go out parsed
+    // and nowhere else: a compile set aside is no account of its columns, and
+    // a degraded one only of the columns its table shares. Never onto a column
+    // a direct edge reached, which a column built from nothing cannot have. The
+    // indirect edges of `--indirect` reach it as they reach every output column
+    // (0011), so a root and an indirect edge do share a column.
+    let fed: HashSet<&str> = edges[..direct].iter().map(|e| e.to_col.as_str()).collect();
+    let roots = resolved
+        .roots
+        .iter()
+        .filter(|r| match plan {
+            Plan::Parsed => true,
+            Plan::PerColumn => shared.contains(&r.column),
+            Plan::Inferred => false,
+        })
+        .filter(|r| !fed.contains(r.column.as_str()))
+        .map(|r| cache::Root {
+            node: model.uid.clone(),
+            column: r.column.clone(),
+            // Part of the list would say the column holds only what those
+            // branches set, so none is said.
+            expressions: if r.complete { r.expressions.clone() } else { Vec::new() },
+        })
+        .collect();
+    Published { plan, edges, direct, inferred, bridged, ambiguous, roots }
 }
 
 /// Edges for the reads a trusted compile makes of names its own CTE does not
@@ -1558,6 +1590,64 @@ mod tests {
             ("model.p.behind".to_string(), cols(&["amount", "id"])),
         ]);
         (project_of(vec![raw, orders, behind]), warehouse)
+    }
+
+    /// A root is the SQL's word, so it goes out on the rung the edges do: a
+    /// compile trusted whole gives all of its own, a degraded one those of the
+    /// columns its table shares, and one set aside none. A value the engine
+    /// read in part goes out unsaid. Under `--indirect` the filter reaches the
+    /// roots too, and only such an edge does.
+    #[test]
+    fn a_root_goes_in_the_cache_where_the_compile_is_trusted_for_it() {
+        let mut raw = node("source.p.raw", "db.sch.raw", &[], &[]);
+        raw.1.kind = "source".into();
+        let model = |uid: &str, rel: &str, sql: &str| {
+            let mut m = node(uid, rel, &["source.p.raw"], &[]);
+            m.1.sql = sql.into();
+            m
+        };
+        let kept = model(
+            "model.p.kept",
+            "db.sch.kept",
+            "with g as (select 'A' as grade union all select 'B') \
+             select r.id, 'web' as channel, g.grade from db.sch.raw r cross join g where r.status = 'open'",
+        );
+        let half = model("model.p.half", "db.sch.half", "select id, 'web' as channel, 'n/a' as note from db.sch.raw");
+        let aside = model("model.p.aside", "db.sch.aside", "select id as order_no, 'web' as channel_code from db.sch.raw");
+        let warehouse = HashMap::from([
+            ("source.p.raw".to_string(), cols(&["amount", "id", "status"])),
+            ("model.p.kept".to_string(), cols(&["channel", "grade", "id"])),
+            ("model.p.half".to_string(), cols(&["amount", "channel", "id"])),
+            ("model.p.aside".to_string(), cols(&["amount", "id"])),
+        ]);
+        let project = project_of(vec![raw, kept, half, aside]);
+        for indirect in [false, true] {
+            let r = run(&project, warehouse.clone(), &opts(true, indirect));
+            let mut got: Vec<(&str, &str, Vec<&str>)> = r
+                .roots
+                .iter()
+                .map(|root| (root.node.as_str(), root.column.as_str(), root.expressions.iter().map(String::as_str).collect()))
+                .collect();
+            got.sort();
+            assert_eq!(
+                got,
+                vec![
+                    ("model.p.half", "channel", vec!["'web'"]),
+                    ("model.p.kept", "channel", vec!["'web'"]),
+                    ("model.p.kept", "grade", vec![]),
+                ]
+            );
+            let onto_roots: Vec<&str> = r
+                .edges
+                .iter()
+                .filter(|e| r.roots.iter().any(|root| root.node == e.to && root.column == e.to_col))
+                .map(|e| e.kind.as_str())
+                .collect();
+            match indirect {
+                false => assert!(onto_roots.is_empty(), "{onto_roots:?}"),
+                true => assert_eq!(onto_roots, vec!["filter", "filter"]),
+            }
+        }
     }
 
     #[test]
@@ -2448,7 +2538,8 @@ mod tests {
         ]);
         let mut seen = Vec::new();
         let r = run_observed(&project_of(vec![thin, codes, m, g]), warehouse, &opts(true, false), |s| {
-            seen.push((s.model.uid.clone(), s.resolved.outputs.clone(), s.resolved.roots.clone()))
+            let roots = s.resolved.roots.iter().map(|r| r.column.clone()).collect();
+            seen.push((s.model.uid.clone(), s.resolved.outputs.clone(), roots))
         });
         (r, seen)
     }
@@ -3225,7 +3316,8 @@ mod tests {
                 continue;
             }
             let edges = |v: &serde_json::Value| -> HashSet<String> {
-                v["edges"].as_array().unwrap().iter().map(|e| e.to_string()).collect()
+                let listed = |k: &str| v[k].as_array().cloned().unwrap_or_default();
+                listed("edges").into_iter().chain(listed("roots")).map(|e| e.to_string()).collect()
             };
             let (w, g) = (edges(&want), edges(&got));
             let only = |a: &HashSet<String>, b: &HashSet<String>| -> String {
@@ -3243,14 +3335,21 @@ mod tests {
         }
     }
 
-    /// The cache with one edge a line, so that the diff of an expected cache
-    /// shows each edge that moved and nothing else.
+    /// The cache with one edge a line, and one root, so that the diff of an
+    /// expected cache shows each that moved and nothing else.
     fn one_edge_a_line(cache: &serde_json::Value) -> String {
         let mut head = cache.clone();
-        let edges = head.as_object_mut().unwrap().remove("edges").unwrap();
+        let fields = head.as_object_mut().unwrap();
+        let lists: Vec<(&str, serde_json::Value)> =
+            ["edges", "roots"].into_iter().filter_map(|k| fields.remove(k).map(|v| (k, v))).collect();
         let head = head.to_string();
-        let lines: Vec<String> = edges.as_array().unwrap().iter().map(|e| e.to_string()).collect();
-        format!("{},\"edges\":[\n{}\n]}}\n", &head[..head.len() - 1], lines.join(",\n"))
+        let mut out = head[..head.len() - 1].to_string();
+        for (k, v) in lists {
+            let lines: Vec<String> = v.as_array().unwrap().iter().map(|e| e.to_string()).collect();
+            out.push_str(&format!(",\"{k}\":[\n{}\n]", lines.join(",\n")));
+        }
+        out.push_str("}\n");
+        out
     }
 
     #[test]
@@ -3390,8 +3489,8 @@ mod tests {
                 let (to, from) = (short(&e.to), short(&e.from));
                 got.push(format!("{to}.{} <- {from}.{} {}", e.to_col, e.from_col, e.kind));
             }
-            for column in &seen.resolved.roots {
-                got.push(format!("{model}.{column} root"));
+            for root in seen.published_roots {
+                got.push(format!("{model}.{} root", root.column));
             }
             for lost in &seen.resolved.lost {
                 got.push(format!("{model}.{} lost", lost.column));

@@ -77,6 +77,16 @@ A column read for two reasons still gets one edge per pair, carrying `dedup_key`
 over `join_key` over `filter`, and the report keeps both reasons
 ([0013](docs/decisions/0013-one-edge-when-a-column-plays-two-indirect-roles.md)).
 
+A column the SQL builds from no column, `current_timestamp() as loaded_at`, has
+no direct edge to carry. The cache lists it under `roots`, beside the edges,
+with what the SQL sets it to, read where it is set however many CTEs copy it
+out, one text for each branch of a union
+([0045](docs/decisions/0045-a-root-goes-in-the-cache-with-its-value.md)). The
+text is left out unless it is the whole value: when something on the way does
+more than cast it, as for a date spine's date, or when the engine read a union
+in part. Under `--indirect` a root gets the row-deciding edges every output
+column gets.
+
 ## The three sources of truth
 
 Column lists come from three places, kept apart on purpose:
