@@ -40,11 +40,14 @@ project, from its artifacts alone, with no project to stand in.
   `compiled/` beside the manifest. Every rule of 0033 holds inside it: the
   manifest wins wherever it has `compiled_code`, a file reading a relation the
   manifest does not give its model is set aside, a path is kept to plain names.
-- **A folder named must be there.** Mistyped, it would read no file, match
-  every model it was named for by name and exit 0, which is the silence this
-  record exists to end; it is refused with exit 1 and nothing is written. The
-  default folder may be missing, as it was before: a manifest with all its
-  `compiled_code` needs none.
+- **A folder named must be the one dbt compiled into.** Mistyped, or the
+  target directory holding `compiled/`, it would read no file, match every
+  model it was named for by name and exit 0, which is the silence this record
+  exists to end. Either is refused with exit 1 and nothing written: a folder
+  that is not there, and one holding `compiled/` but no folder of the root
+  project's name, the target directory, whose `compiled/` the error names.
+  The default folder may be missing, as it was before: a manifest with all
+  its `compiled_code` needs none.
 - **The report names the folder looked in**, as `compiled_files`, and a file
   as `compiled/<package>/...` in the default folder, which dbt-edith joins to
   the target directory, or else whole, under the folder named: the report is

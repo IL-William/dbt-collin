@@ -218,14 +218,24 @@ pub fn generate(opts: &Options) -> Result<Outcome, String> {
 /// Everything the pass reads from disk. The catalog is optional: without one
 /// the pass still runs, and no compile can be confirmed.
 pub fn load(opts: &Options) -> Result<Loaded, String> {
-    // A folder named and not there would read no file, and every model it
+    // A folder named must be the one dbt compiled into. Not a folder, or the
+    // target directory holding it, it would read no file, and every model it
     // was named for would come out matched by name, with an exit code of 0.
-    if opts.compiled.is_some() && !opts.compiled_dir().is_dir() {
-        return Err(format!("--compiled {}: no such folder", opts.compiled_dir().display()));
+    let compiled = opts.compiled_dir();
+    if opts.compiled.is_some() && !compiled.is_dir() {
+        return Err(format!("--compiled {}: not a folder", compiled.display()));
     }
     let manifest = RawManifest::load(&opts.manifest_path())?;
     let mut project = Project::from_manifest(manifest);
-    read_compiled_files(&mut project, &opts.compiled_dir(), &opts.compiled_label());
+    let inner = compiled.join("compiled");
+    if opts.compiled.is_some() && inner.is_dir() && !compiled.join(&project.project_name).is_dir() {
+        return Err(format!(
+            "--compiled {}: it holds compiled/, so it is the target directory; name the folder dbt compiled into, {}",
+            compiled.display(),
+            inner.display()
+        ));
+    }
+    read_compiled_files(&mut project, &compiled, &opts.compiled_label());
 
     let catalog_path = opts.catalog_path();
     let witness = if catalog_path.exists() {
@@ -1452,7 +1462,7 @@ fn infer_edges(
 /// dbt writes `original_file_path` with the separator of the machine that
 /// parsed, so the path is split on both. The manifest is not trusted, so every
 /// part must be a plain name: a `..`, a root or a drive would read outside the
-/// target. Never `run/`, where dbt wraps the select in the statement that
+/// folder dbt compiled into. Never `run/`, where dbt wraps the select in the statement that
 /// builds the table, a `create ... as` or a `merge` (0033).
 fn compiled_path(node: &Node, root: &str, fusion: bool) -> Option<String> {
     let plain = |name: &str| !matches!(name, "" | "." | "..") && !name.contains(['/', '\\', ':']);
@@ -1483,8 +1493,8 @@ fn fusion(dbt_version: &str) -> bool {
 /// (0033).
 ///
 /// The manifest wins wherever it has `compiled_code`, even empty: it was
-/// written with the graph the pass walks, and a file under `target/` may be
-/// older than both, or compiled for another target. A Python model is never
+/// written with the graph the pass walks, and a compiled file may be older
+/// than both, or compiled for another target. A Python model is never
 /// read: its compiled file is Python.
 ///
 /// `dir` is the folder dbt compiled into, and `label` how the report names it,
@@ -3368,8 +3378,18 @@ mod tests {
         std::fs::remove_file(&got.out).unwrap();
         o.compiled = Some(t.0.join("sqll"));
         let refused = generate(&o).err().unwrap_or_default();
-        assert!(refused.contains("--compiled") && refused.contains("no such folder"), "{refused}");
+        assert!(refused.contains("--compiled") && refused.contains("not a folder"), "{refused}");
         assert!(!got.out.exists());
+
+        // So is the target directory, the folder holding compiled/: it holds
+        // no folder of the project's name, and would read no file either.
+        t.write("target/compiled/shop/models/orders.sql", "select id, amount from db.raw.orders");
+        o.compiled = Some(t.0.join("target"));
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("so it is the target directory") && refused.contains("target/compiled"), "{refused}");
+        assert!(!got.out.exists());
+        o.compiled = Some(t.0.join("target").join("compiled"));
+        assert_eq!(generate(&o).unwrap().totals.sql_from_files, 1);
     }
 
     #[test]

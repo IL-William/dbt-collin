@@ -15,14 +15,15 @@ USAGE
     collin generate [--project DIR] [options]
 
 OPTIONS
-    --project DIR     dbt project root (default: .)
+    --project DIR     dbt project root, where the manifest is looked for
+                      when none is named (default: .)
     --manifest PATH   default: <project>/target/manifest.json. The four paths
                       below default beside it, where dbt writes them, so a
                       manifest copied out of its project is read alone.
     --compiled DIR    the folder dbt compiled into, one folder per package in
                       it, read for a model the manifest has no compiled_code
-                      for; refused when it is not there (default: compiled/
-                      beside the manifest)
+                      for; refused when it is not a folder, or holds
+                      compiled/ (default: compiled/ beside the manifest)
     --catalog PATH    default: catalog.json beside the manifest
     --out PATH        default: column_lineage.collin.json beside the manifest
     --report PATH     default: column_lineage.report.json beside the manifest
@@ -36,7 +37,8 @@ OPTIONS
 
 EXIT
     0  a cache was written
-    1  it could not be written
+    1  it could not be written, or --compiled named no folder dbt
+       compiled into
 ";
 
 /// `collin 0.1.0 (9e8d7c6)`: one line, the shape dbt-lens reads to decide
