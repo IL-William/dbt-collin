@@ -218,22 +218,33 @@ pub fn generate(opts: &Options) -> Result<Outcome, String> {
 /// Everything the pass reads from disk. The catalog is optional: without one
 /// the pass still runs, and no compile can be confirmed.
 pub fn load(opts: &Options) -> Result<Loaded, String> {
-    // A folder named must be the one dbt compiled into. Not a folder, or the
-    // target directory holding it, it would read no file, and every model it
-    // was named for would come out matched by name, with an exit code of 0.
+    // A folder named must be the one dbt compiled into. Not a folder, or one
+    // holding the folder of none of the files it is named for (the target
+    // directory, one level too deep, the project), it would read no file,
+    // and every model it was named for would come out matched by name, with
+    // an exit code of 0.
     let compiled = opts.compiled_dir();
     if opts.compiled.is_some() && !compiled.is_dir() {
         return Err(format!("--compiled {}: not a folder", compiled.display()));
     }
     let manifest = RawManifest::load(&opts.manifest_path())?;
     let mut project = Project::from_manifest(manifest);
-    let inner = compiled.join("compiled");
-    if opts.compiled.is_some() && inner.is_dir() && !compiled.join(&project.project_name).is_dir() {
-        return Err(format!(
-            "--compiled {}: it holds compiled/, so it is the target directory; name the folder dbt compiled into, {}",
-            compiled.display(),
-            inner.display()
-        ));
+    if opts.compiled.is_some() {
+        let firsts = wanted_folders(&project);
+        if !firsts.is_empty() && !firsts.iter().any(|f| compiled.join(f).is_dir()) {
+            let inner = compiled.join("compiled");
+            let hint = if inner.is_dir() {
+                format!(": it holds compiled/, so it is the target directory, and {} is the folder", inner.display())
+            } else {
+                String::new()
+            };
+            let named: Vec<&str> = firsts.iter().take(5).map(String::as_str).collect();
+            return Err(format!(
+                "--compiled {}: none of the folders its files would be in is there ({}), so no compiled file would be read{hint}",
+                compiled.display(),
+                named.join(", ")
+            ));
+        }
     }
     read_compiled_files(&mut project, &compiled, &opts.compiled_label());
 
@@ -1486,6 +1497,23 @@ fn compiled_path(node: &Node, root: &str, fusion: bool) -> Option<String> {
 /// dbt Fusion is dbt 2.0 and later, dbt-core 1.x and before.
 fn fusion(dbt_version: &str) -> bool {
     dbt_version.split('.').next().and_then(|major| major.parse::<u32>().ok()).is_some_and(|major| major >= 2)
+}
+
+/// The first folder of each compiled file `read_compiled_files` would look
+/// for, a package's name or, in Fusion's layout, the root project's: a folder
+/// of dbt's compiled SQL holds at least one, and any other holds none.
+fn wanted_folders(project: &Project) -> Vec<String> {
+    let fusion = fusion(&project.dbt_version);
+    let mut firsts: Vec<String> = project
+        .nodes
+        .values()
+        .filter(|n| n.is_model() && n.is_sql() && n.sql_source == SqlSource::Missing && !n.file.is_empty())
+        .filter_map(|n| compiled_path(n, &project.project_name, fusion))
+        .filter_map(|rel| rel.split('/').next().map(str::to_string))
+        .collect();
+    firsts.sort();
+    firsts.dedup();
+    firsts
 }
 
 /// Gives each SQL model the manifest has no `compiled_code` for the file dbt
@@ -3381,12 +3409,17 @@ mod tests {
         assert!(refused.contains("--compiled") && refused.contains("not a folder"), "{refused}");
         assert!(!got.out.exists());
 
-        // So is the target directory, the folder holding compiled/: it holds
-        // no folder of the project's name, and would read no file either.
+        // So is a folder holding none of the folders its files would be in:
+        // the target directory, which says where compiled/ is, and a folder
+        // one level too deep. Each would read no file either.
         t.write("target/compiled/shop/models/orders.sql", "select id, amount from db.raw.orders");
         o.compiled = Some(t.0.join("target"));
         let refused = generate(&o).err().unwrap_or_default();
-        assert!(refused.contains("so it is the target directory") && refused.contains("target/compiled"), "{refused}");
+        assert!(refused.contains("(shop)") && refused.contains("so it is the target directory"), "{refused}");
+        assert!(refused.contains(&t.0.join("target").join("compiled").display().to_string()), "{refused}");
+        o.compiled = Some(t.0.join("target").join("compiled").join("shop"));
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("none of the folders") && !refused.contains("target directory"), "{refused}");
         assert!(!got.out.exists());
         o.compiled = Some(t.0.join("target").join("compiled"));
         assert_eq!(generate(&o).unwrap().totals.sql_from_files, 1);

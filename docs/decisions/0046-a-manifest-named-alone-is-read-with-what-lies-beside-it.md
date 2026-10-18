@@ -40,14 +40,17 @@ project, from its artifacts alone, with no project to stand in.
   `compiled/` beside the manifest. Every rule of 0033 holds inside it: the
   manifest wins wherever it has `compiled_code`, a file reading a relation the
   manifest does not give its model is set aside, a path is kept to plain names.
-- **A folder named must be the one dbt compiled into.** Mistyped, or the
-  target directory holding `compiled/`, it would read no file, match every
-  model it was named for by name and exit 0, which is the silence this record
-  exists to end. Either is refused with exit 1 and nothing written: a folder
-  that is not there, and one holding `compiled/` but no folder of the root
-  project's name, the target directory, whose `compiled/` the error names.
-  The default folder may be missing, as it was before: a manifest with all
-  its `compiled_code` needs none.
+- **A folder named must be the one dbt compiled into.** Mistyped, the target
+  directory holding `compiled/`, one level too deep or the project itself, it
+  would read no file, match every model it was named for by name and exit 0,
+  which is the silence this record exists to end. So a path that is not a
+  folder is refused with exit 1 and nothing written, and so is a folder
+  holding none of the folders its files would be in, each package's or, in
+  Fusion's layout, the root project's; the error names `compiled/` when the
+  folder holds one. A folder holding some of them is read: a compile that
+  selected part of the project leaves the others out. The default folder may
+  be missing, as it was before: a manifest with all its `compiled_code`
+  needs none.
 - **The report names the folder looked in**, as `compiled_files`, and a file
   as `compiled/<package>/...` in the default folder, which dbt-edith joins to
   the target directory, or else whole, under the folder named: the report is
