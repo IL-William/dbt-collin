@@ -140,7 +140,8 @@ pub enum SqlSource {
     /// No `compiled_code`, and nothing where dbt writes the compiled file.
     Missing,
     /// No `compiled_code`, and the SQL is the compiled file dbt wrote, by its
-    /// path under the target directory.
+    /// path under the target directory, or whole in the folder `--compiled`
+    /// named.
     File(String),
     /// No `compiled_code`, and the compiled file could not be used, for this
     /// reason.

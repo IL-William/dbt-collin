@@ -11,6 +11,21 @@ report that names every gap.
 collin generate --project /path/to/dbt-project
 ```
 
+A project is not needed, only what dbt left of it: a manifest, the SQL it
+compiled, and a catalog if there is one. Everything defaults to the manifest's
+folder, where dbt writes it all, the cache and the report included, so a CI
+run's artifacts are read where they were copied, with no project around them
+([0046](docs/decisions/0046-a-manifest-named-alone-is-read-with-what-lies-beside-it.md)):
+
+```
+collin generate --manifest artifacts/manifest.json                            # compiled/ and catalog.json beside it
+collin generate --manifest artifacts/manifest.json --compiled sql/compiled    # the SQL in a folder of its own
+```
+
+`--compiled` names the folder dbt compiled into, the one holding a folder per
+package (`target/compiled`), and is refused when it is not there. `collin
+--help` lists the rest.
+
 ## Install
 
 Each release carries a binary for macOS on Apple silicon and a static one for
@@ -178,7 +193,8 @@ in its table's order, the catalog's `index` or the parent's projection, since a
 - **A model the manifest has no `compiled_code` for**, which a `parse` writes,
   and a `run` for what it did not select, is read from the file a compile left
   in `compiled/` beside the manifest, where the dbt that wrote the manifest puts
-  it ([0033](docs/decisions/0033-a-model-without-compiled-code-reads-its-compiled-file.md)).
+  it, or in the folder `--compiled` names
+  ([0033](docs/decisions/0033-a-model-without-compiled-code-reads-its-compiled-file.md)).
   That file may be older than the manifest, or compiled for another target. One
   that reads a relation the manifest does not give its model is set aside and
   its edges inferred; one whose code changed under the same `ref`s is read as it

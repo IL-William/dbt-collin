@@ -37,7 +37,8 @@ OPTIONS
     --out DIR         where to write <model>.json, absent or empty
     --project DIR     dbt project root (default: .)
     --manifest PATH   default: <project>/target/manifest.json
-    --catalog PATH    default: <project>/target/catalog.json
+    --compiled DIR    default: compiled/ beside the manifest
+    --catalog PATH    default: catalog.json beside the manifest
     --no-infer        as for generate. Only `published` and
     --indirect        `published_indirect` depend on them.
 ";
@@ -56,7 +57,7 @@ fn main() -> ExitCode {
 }
 
 fn dump() -> Result<(usize, PathBuf), String> {
-    let (mut root, mut manifest, mut catalog, mut out) = (PathBuf::from("."), None, None, None);
+    let (mut root, mut manifest, mut catalog, mut compiled, mut out) = (PathBuf::from("."), None, None, None, None);
     let (mut infer, mut indirect) = (true, false);
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -66,6 +67,7 @@ fn dump() -> Result<(usize, PathBuf), String> {
             "--project" => root = value()?,
             "--manifest" => manifest = Some(value()?),
             "--catalog" => catalog = Some(value()?),
+            "--compiled" => compiled = Some(value()?),
             "--no-infer" => infer = false,
             "--indirect" => indirect = true,
             _ => return Err(format!("unknown flag {flag}\n\n{USAGE}")),
@@ -76,6 +78,7 @@ fn dump() -> Result<(usize, PathBuf), String> {
     let mut opts = Options::new(root);
     opts.manifest = manifest;
     opts.catalog = catalog;
+    opts.compiled = compiled;
     opts.infer = infer;
     opts.indirect = indirect;
 

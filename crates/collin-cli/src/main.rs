@@ -16,11 +16,16 @@ USAGE
 
 OPTIONS
     --project DIR     dbt project root (default: .)
-    --manifest PATH   default: <project>/target/manifest.json. A model it has
-                      no compiled_code for is read from compiled/ beside it.
-    --catalog PATH    default: <project>/target/catalog.json
-    --out PATH        default: <project>/target/column_lineage.json
-    --report PATH     default: <project>/target/column_lineage.report.json
+    --manifest PATH   default: <project>/target/manifest.json. The four paths
+                      below default beside it, where dbt writes them, so a
+                      manifest copied out of its project is read alone.
+    --compiled DIR    the folder dbt compiled into, one folder per package in
+                      it, read for a model the manifest has no compiled_code
+                      for; refused when it is not there (default: compiled/
+                      beside the manifest)
+    --catalog PATH    default: catalog.json beside the manifest
+    --out PATH        default: column_lineage.collin.json beside the manifest
+    --report PATH     default: column_lineage.report.json beside the manifest
     --target NAME     recorded in the cache, shown by dbt-lens
     --no-infer        leave degraded models empty rather than name matching
     --indirect        also emit join keys, dedup keys and filter predicates,
@@ -64,6 +69,7 @@ fn main() -> ExitCode {
     let mut project = PathBuf::from(".");
     let mut manifest = None;
     let mut catalog = None;
+    let mut compiled = None;
     let mut out = None;
     let mut report = None;
     let mut target = String::new();
@@ -93,6 +99,13 @@ fn main() -> ExitCode {
             "--catalog" => match need(i, "--catalog") {
                 Ok(v) => {
                     catalog = Some(PathBuf::from(v));
+                    2
+                }
+                Err(e) => return fail(&e),
+            },
+            "--compiled" => match need(i, "--compiled") {
+                Ok(v) => {
+                    compiled = Some(PathBuf::from(v));
                     2
                 }
                 Err(e) => return fail(&e),
@@ -138,15 +151,12 @@ fn main() -> ExitCode {
     let mut opts = Options::new(project);
     opts.manifest = manifest;
     opts.catalog = catalog;
+    opts.compiled = compiled;
+    opts.out = out;
+    opts.report = report;
     opts.target = target;
     opts.infer = infer;
     opts.indirect = indirect;
-    if let Some(p) = out {
-        opts.out = p;
-    }
-    if let Some(p) = report {
-        opts.report = p;
-    }
 
     let started = std::time::Instant::now();
     match generate(&opts) {
@@ -247,7 +257,7 @@ fn main() -> ExitCode {
             println!("\n  cache   {}", o.out.display());
             println!("  report  {}", o.report.display());
             if t.without_compiled_code > 0 {
-                println!("  sql     {}", opts.target_dir().join("compiled").display());
+                println!("  sql     {}", opts.compiled_dir().display());
             }
             println!();
             ExitCode::SUCCESS

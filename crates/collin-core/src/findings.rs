@@ -90,9 +90,9 @@ pub fn of(report: &Report) -> Vec<Finding> {
         severity: "warning",
         one: "compiled file was compiled for another target",
         many: "compiled files were compiled for another target",
-        why: "The manifest has no SQL for these models, so collin read target/compiled, and those \
-              files read relations the manifest does not give the models: they come from another \
-              target or older code. Their edges are inferred by name.",
+        why: "The manifest has no SQL for these models, so collin read the files a compile left, \
+              and those files read relations the manifest does not give the models: they come \
+              from another target or older code. Their edges are inferred by name.",
         action: "Compile the project for this target so the manifest carries each model's SQL: \
                  dbt compile --target <target>.",
         pick: |m| m.sql_file_set_aside.then(|| m.sql_file.clone().unwrap_or_default()),
