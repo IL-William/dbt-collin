@@ -60,8 +60,11 @@ diff -r /tmp/collin/before/dump $O/dump                     # what the engine sa
   Where an edge comes from and what role it plays are shown only as the pass
   published them, never worked out again, so the dump cannot describe an older
   pass.
-- **The figures go in the commit message, the names never do.** Everything these
-  commands write is the project's.
+- **Neither the figures nor the names go in a commit message or a pull
+  request.** Everything these commands write is the project's, and this
+  repository is public: say what was compared and that it agreed, or what moved
+  and why, never how many. Jaffle Shop's and Shopify's figures are public, and
+  can be given.
 
 ## Rules
 
