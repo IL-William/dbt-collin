@@ -219,10 +219,9 @@ pub fn generate(opts: &Options) -> Result<Outcome, String> {
 /// the pass still runs, and no compile can be confirmed.
 pub fn load(opts: &Options) -> Result<Loaded, String> {
     // A folder named must be the one dbt compiled into. Not a folder, or one
-    // holding the folder of none of the files it is named for (the target
-    // directory, one level too deep, the project), it would read no file,
-    // and every model it was named for would come out matched by name, with
-    // an exit code of 0.
+    // holding the package folder of no SQL model (the target directory, one
+    // level too deep, the project), it would read no file, and every model it
+    // was named for would come out matched by name, with an exit code of 0.
     let compiled = opts.compiled_dir();
     if opts.compiled.is_some() && !compiled.is_dir() {
         return Err(format!("--compiled {}: not a folder", compiled.display()));
@@ -1503,8 +1502,9 @@ fn fusion(dbt_version: &str) -> bool {
 
 /// The first folder of every SQL model's compiled file, its package's name in
 /// both of dbt's layouts, or none when `read_compiled_files` has no file to
-/// look for. A folder of dbt's compiled SQL holds at least one, and any other
-/// holds none. Every model counts, not only those left to read: a compile
+/// look for. A folder of dbt's compiled SQL holds at least one, and those it
+/// is mistaken for, the target directory, one level too deep, the project,
+/// hold none. Every model counts, not only those left to read: a compile
 /// that left a package out, `--exclude package:...`, gives the root's models
 /// their `compiled_code` and its folder holds the root's files alone.
 fn wanted_folders(project: &Project) -> Vec<String> {
