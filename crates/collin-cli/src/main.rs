@@ -22,8 +22,8 @@ OPTIONS
                       manifest copied out of its project is read alone.
     --compiled DIR    the folder dbt compiled into, one folder per package in
                       it, read for a model the manifest has no compiled_code
-                      for; refused when it holds the folder of none of
-                      those files (default: compiled/ beside the manifest)
+                      for; refused when it holds the package folder of
+                      no model (default: compiled/ beside the manifest)
     --catalog PATH    default: catalog.json beside the manifest
     --out PATH        default: column_lineage.collin.json beside the manifest
     --report PATH     default: column_lineage.report.json beside the manifest

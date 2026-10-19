@@ -23,8 +23,8 @@ collin generate --manifest artifacts/manifest.json --compiled sql/compiled    # 
 ```
 
 `--compiled` names the folder dbt compiled into, the one holding a folder per
-package (`target/compiled`), and is refused when it holds the folder of none
-of the files it is named for, as the target directory does. `collin --help`
+package (`target/compiled`), and is refused when it holds the package folder
+of none of the manifest's models, as the target directory does. `collin --help`
 lists the rest.
 
 ## Install

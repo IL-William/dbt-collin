@@ -233,16 +233,18 @@ pub fn load(opts: &Options) -> Result<Loaded, String> {
         let firsts = wanted_folders(&project);
         if !firsts.is_empty() && !firsts.iter().any(|f| compiled.join(f).is_dir()) {
             let inner = compiled.join("compiled");
-            let hint = if inner.is_dir() {
+            let hint = if firsts.iter().any(|f| inner.join(f).is_dir()) {
                 format!(": it holds compiled/, so it is the target directory, and {} is the folder", inner.display())
             } else {
                 String::new()
             };
-            let named: Vec<&str> = firsts.iter().take(5).map(String::as_str).collect();
+            let mut named = firsts.iter().take(5).map(String::as_str).collect::<Vec<_>>().join(", ");
+            if firsts.len() > 5 {
+                named.push_str(&format!(" and {} more", firsts.len() - 5));
+            }
             return Err(format!(
-                "--compiled {}: none of the folders its files would be in is there ({}), so no compiled file would be read{hint}",
-                compiled.display(),
-                named.join(", ")
+                "--compiled {}: none of the folders its files would be in is there ({named}), so no compiled file would be read{hint}",
+                compiled.display()
             ));
         }
     }
@@ -1499,18 +1501,21 @@ fn fusion(dbt_version: &str) -> bool {
     dbt_version.split('.').next().and_then(|major| major.parse::<u32>().ok()).is_some_and(|major| major >= 2)
 }
 
-/// The first folder of each compiled file `read_compiled_files` would look
-/// for, a package's name or, in Fusion's layout, the root project's: a folder
-/// of dbt's compiled SQL holds at least one, and any other holds none.
+/// The first folder of every SQL model's compiled file, its package's name in
+/// both of dbt's layouts, or none when `read_compiled_files` has no file to
+/// look for. A folder of dbt's compiled SQL holds at least one, and any other
+/// holds none. Every model counts, not only those left to read: a compile
+/// that left a package out, `--exclude package:...`, gives the root's models
+/// their `compiled_code` and its folder holds the root's files alone.
 fn wanted_folders(project: &Project) -> Vec<String> {
     let fusion = fusion(&project.dbt_version);
-    let mut firsts: Vec<String> = project
-        .nodes
-        .values()
-        .filter(|n| n.is_model() && n.is_sql() && n.sql_source == SqlSource::Missing && !n.file.is_empty())
-        .filter_map(|n| compiled_path(n, &project.project_name, fusion))
-        .filter_map(|rel| rel.split('/').next().map(str::to_string))
-        .collect();
+    let path = |n: &Node| compiled_path(n, &project.project_name, fusion);
+    let sql = || project.nodes.values().filter(|n| n.is_model() && n.is_sql());
+    if !sql().any(|n| n.sql_source == SqlSource::Missing && path(n).is_some()) {
+        return Vec::new();
+    }
+    let mut firsts: Vec<String> =
+        sql().filter_map(path).filter_map(|rel| rel.split('/').next().map(str::to_string)).collect();
     firsts.sort();
     firsts.dedup();
     firsts
@@ -3421,8 +3426,52 @@ mod tests {
         let refused = generate(&o).err().unwrap_or_default();
         assert!(refused.contains("none of the folders") && !refused.contains("target directory"), "{refused}");
         assert!(!got.out.exists());
+        o.compiled = Some(t.0.clone());
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("none of the folders") && !refused.contains("target directory"), "{refused}");
         o.compiled = Some(t.0.join("target").join("compiled"));
         assert_eq!(generate(&o).unwrap().totals.sql_from_files, 1);
+    }
+
+    #[test]
+    fn a_compiled_folder_is_known_by_any_model_it_holds() {
+        // A build that left a package out gives the root's models their
+        // compiled_code and the package's none: the folder it compiled into
+        // holds the root's files alone, and is the right one, with nothing
+        // in it for the package.
+        let t = Target::new("target");
+        let model = |pkg: &str, name: &str| {
+            serde_json::json!({"name": name, "resource_type": "model", "relation_name": format!("db.{pkg}.{name}"),
+                "package_name": pkg, "original_file_path": format!("models/{name}.sql"),
+                "config": {"materialized": "table"}})
+        };
+        let mut orders = model("shop", "orders");
+        orders["compiled_code"] = "select 1 as id".into();
+        let mut manifest = serde_json::json!({
+            "metadata": {"dbt_version": "1.11.8", "project_name": "shop", "adapter_type": "snowflake"},
+            "nodes": {"model.shop.orders": orders, "model.util.dates": model("util", "dates")}
+        });
+        t.write("target/manifest.json", manifest.to_string());
+        t.write("target/compiled/shop/models/orders.sql", "select 1 as id");
+
+        let mut o = Options::new(t.0.clone());
+        o.compiled = Some(t.0.join("target").join("compiled"));
+        assert_eq!(generate(&o).unwrap().totals.sql_from_files, 0);
+        o.compiled = Some(t.0.join("target"));
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("(shop, util)") && refused.contains("so it is the target directory"), "{refused}");
+
+        // Without project_name the folders are the packages' all the same.
+        manifest["metadata"].as_object_mut().unwrap().remove("project_name");
+        t.write("target/manifest.json", manifest.to_string());
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("(shop, util)") && refused.contains("so it is the target directory"), "{refused}");
+
+        // With every model's compiled_code there is nothing to read, and
+        // nothing to refuse.
+        manifest["nodes"]["model.util.dates"]["compiled_code"] = "select 1 as day".into();
+        t.write("target/manifest.json", manifest.to_string());
+        assert_eq!(generate(&o).unwrap().totals.sql_from_files, 0);
     }
 
     #[test]

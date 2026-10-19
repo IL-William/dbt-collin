@@ -45,11 +45,13 @@ project, from its artifacts alone, with no project to stand in.
   would read no file, match every model it was named for by name and exit 0,
   which is the silence this record exists to end. So a path that is not a
   folder is refused with exit 1 and nothing written, and so is a folder
-  holding none of the folders its files would be in, each package's or, in
-  Fusion's layout, the root project's; the error names `compiled/` when the
-  folder holds one. A folder holding some of them is read: a compile that
-  selected part of the project leaves the others out. The default folder may
-  be missing, as it was before: a manifest with all its `compiled_code`
+  holding the package folder of none of the manifest's SQL models, while one
+  of them is left to read; the error names the `compiled/` inside, when that
+  one holds some. Every model counts, those with `compiled_code` too: a build
+  that left a package out gives the root's models theirs, and its folder holds
+  the root's files alone. A folder holding some of them is read: a compile
+  that selected part of the project leaves the others out. The default folder
+  may be missing, as it was before: a manifest with all its `compiled_code`
   needs none.
 - **The report names the folder looked in**, as `compiled_files`, and a file
   as `compiled/<package>/...` in the default folder, which dbt-edith joins to
