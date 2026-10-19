@@ -21,7 +21,22 @@ done, so that whoever picks it up needs nothing but this tree.
    before collin is run on it.
 4. **A third witness, optionally**: Snowflake's `ACCESS_HISTORY`, read outside
    collin, which never reaches a warehouse (0001).
-5. **On hold: BigQuery**, not a priority for now. Its gaps are the engine's
+5. **The right side of an `EXCEPT` read as rows, not values.** The engine walks
+   both sides of a set operation (`branches` in `engine.rs` says so), so a
+   column on the right of an `EXCEPT`, which only takes rows away, reaches the
+   output column by a value edge. It should be an indirect edge under
+   `--indirect`, as a `WHERE` gives, and nothing without it. dbt-edith hides
+   indirect edges by default (its 0097), but not these. Whether the right side
+   of an `INTERSECT` is the same is part of the question. It starts with the
+   shape in lineage-library, then the mark; done when the shape passes and
+   the caches of Jaffle Shop and Shopify move only where an `EXCEPT` stands.
+6. **A union's literal beside a copied column.** A column that one branch of a
+   union sets to a literal and another copies from a table has an edge, so it
+   is no root and its literal is in no list (0045, Consequences): the value
+   that branch gives is lost. The cache would carry the literal beside the
+   edge, and stay at version 1 doing so (AGENTS.md). Done when such a union,
+   written as a lineage-library shape, has its literal in the cache.
+7. **On hold: BigQuery**, not a priority for now. Its gaps are the engine's
    STRUCT fields, `UNNEST` and `PIVOT` (On public projects, below).
 
 The precision, coverage and audit figures below were measured with the
