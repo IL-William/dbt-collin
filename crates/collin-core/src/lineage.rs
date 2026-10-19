@@ -34,12 +34,19 @@ use crate::report::{
 use crate::role;
 use crate::schema::{Agreement, Provenance, Store};
 
+/// What a run reads and writes. Every path left unset is found beside the
+/// manifest, where dbt writes them all, so that a manifest named outside any
+/// project, an artifact of another machine's run, is read with its own
+/// catalog and compiled SQL and gets its cache beside it (0046).
 pub struct Options {
     pub project: PathBuf,
     pub manifest: Option<PathBuf>,
     pub catalog: Option<PathBuf>,
-    pub out: PathBuf,
-    pub report: PathBuf,
+    /// The folder dbt compiled into, one folder per package in it, read for a
+    /// model the manifest has no `compiled_code` for (0033).
+    pub compiled: Option<PathBuf>,
+    pub out: Option<PathBuf>,
+    pub report: Option<PathBuf>,
     /// Fill degraded models by name matching. On by default: a labelled
     /// inference beats a blank graph, and the label is what keeps it honest.
     pub infer: bool,
@@ -60,14 +67,13 @@ pub struct Options {
 
 impl Options {
     pub fn new(project: PathBuf) -> Options {
-        let out = cache::default_path(&project.join("target"));
-        let rep = project.join("target").join("column_lineage.report.json");
         Options {
             project,
             manifest: None,
             catalog: None,
-            out,
-            report: rep,
+            compiled: None,
+            out: None,
+            report: None,
             infer: true,
             indirect: false,
             target: String::new(),
@@ -76,14 +82,37 @@ impl Options {
     fn manifest_path(&self) -> PathBuf {
         self.manifest.clone().unwrap_or_else(|| self.project.join("target").join("manifest.json"))
     }
-    /// The manifest's directory. dbt writes `compiled/` beside the manifest, so
-    /// that is where the compiled files are looked for, wherever `--manifest`
-    /// points (0033).
+    /// The manifest's directory, where dbt writes the catalog and `compiled/`
+    /// beside it, wherever `--manifest` points (0033, 0046).
     pub fn target_dir(&self) -> PathBuf {
         self.manifest_path().parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf)
     }
-    fn catalog_path(&self) -> PathBuf {
-        self.catalog.clone().unwrap_or_else(|| self.project.join("target").join("catalog.json"))
+    pub fn catalog_path(&self) -> PathBuf {
+        self.catalog.clone().unwrap_or_else(|| self.target_dir().join("catalog.json"))
+    }
+    /// A folder named is made whole, its trailing separator dropped: the
+    /// report names files under it, and is read from beside the manifest, not
+    /// from where collin ran.
+    pub fn compiled_dir(&self) -> PathBuf {
+        match &self.compiled {
+            Some(dir) => std::path::absolute(dir).unwrap_or_else(|_| dir.clone()).components().collect(),
+            None => self.target_dir().join("compiled"),
+        }
+    }
+    pub fn out_path(&self) -> PathBuf {
+        self.out.clone().unwrap_or_else(|| cache::default_path(&self.target_dir()))
+    }
+    pub fn report_path(&self) -> PathBuf {
+        self.report.clone().unwrap_or_else(|| self.target_dir().join("column_lineage.report.json"))
+    }
+    /// How the report names a compiled file: `compiled/<package>/...` in the
+    /// default folder, from the manifest's directory as dbt-edith joins it,
+    /// else whole, under the folder named.
+    fn compiled_label(&self) -> String {
+        match &self.compiled {
+            None => "compiled".to_string(),
+            Some(_) => self.compiled_dir().display().to_string().trim_end_matches(['/', '\\']).to_string(),
+        }
     }
 }
 
@@ -180,22 +209,45 @@ pub fn generate(opts: &Options) -> Result<Outcome, String> {
     let Run { edges, roots, mut report } = run(&project, warehouse, opts);
     report.set_catalog_elsewhere(catalog_elsewhere);
     report.findings = crate::findings::of(&report);
-    Cache::new(opts.target.clone(), edges, roots).write(&opts.out)?;
-    report.write(&opts.report)?;
-    Ok(Outcome {
-        totals: report.totals,
-        findings: report.findings,
-        out: opts.out.clone(),
-        report: opts.report.clone(),
-    })
+    let (out, report_path) = (opts.out_path(), opts.report_path());
+    Cache::new(opts.target.clone(), edges, roots).write(&out)?;
+    report.write(&report_path)?;
+    Ok(Outcome { totals: report.totals, findings: report.findings, out, report: report_path })
 }
 
 /// Everything the pass reads from disk. The catalog is optional: without one
 /// the pass still runs, and no compile can be confirmed.
 pub fn load(opts: &Options) -> Result<Loaded, String> {
+    // A folder named must be the one dbt compiled into. Not a folder, or one
+    // holding the package folder of no SQL model (the target directory, one
+    // level too deep, the project), it would read no file, and every model it
+    // was named for would come out matched by name, with an exit code of 0.
+    let compiled = opts.compiled_dir();
+    if opts.compiled.is_some() && !compiled.is_dir() {
+        return Err(format!("--compiled {}: not a folder", compiled.display()));
+    }
     let manifest = RawManifest::load(&opts.manifest_path())?;
     let mut project = Project::from_manifest(manifest);
-    read_compiled_files(&mut project, &opts.target_dir());
+    if opts.compiled.is_some() {
+        let firsts = wanted_folders(&project);
+        if !firsts.is_empty() && !firsts.iter().any(|f| compiled.join(f).is_dir()) {
+            let inner = compiled.join("compiled");
+            let hint = if firsts.iter().any(|f| inner.join(f).is_dir()) {
+                format!(": it holds compiled/, so it is the target directory, and {} is the folder", inner.display())
+            } else {
+                String::new()
+            };
+            let mut named = firsts.iter().take(5).map(String::as_str).collect::<Vec<_>>().join(", ");
+            if firsts.len() > 5 {
+                named.push_str(&format!(" and {} more", firsts.len() - 5));
+            }
+            return Err(format!(
+                "--compiled {}: none of the folders its files would be in is there ({named}), so no compiled file would be read{hint}",
+                compiled.display()
+            ));
+        }
+    }
+    read_compiled_files(&mut project, &compiled, &opts.compiled_label());
 
     let catalog_path = opts.catalog_path();
     let witness = if catalog_path.exists() {
@@ -672,7 +724,7 @@ pub fn run_observed(
     }
 
     if rep.totals.without_compiled_code > 0 {
-        rep.compiled_files = opts.target_dir().join("compiled").display().to_string();
+        rep.compiled_files = opts.compiled_dir().display().to_string();
     }
     rep.models.sort_by(|a, b| a.name.cmp(&b.name));
     rep.row_deciding_reads.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1407,9 +1459,9 @@ fn infer_edges(
     (out, ambiguous)
 }
 
-/// Where dbt writes a model's compiled SQL, relative to the target directory
-/// and with `/` between its parts, or None when the manifest gives no path
-/// inside that directory.
+/// Where dbt writes a model's compiled SQL, relative to the folder it compiles
+/// into, `compiled/` in the target directory, and with `/` between its parts,
+/// or None when the manifest gives no path inside that folder.
 ///
 /// dbt-core writes `compiled/<package>/<original_file_path>`, and dbt Fusion
 /// does the same for the root project. For an installed package Fusion writes
@@ -1422,14 +1474,14 @@ fn infer_edges(
 /// dbt writes `original_file_path` with the separator of the machine that
 /// parsed, so the path is split on both. The manifest is not trusted, so every
 /// part must be a plain name: a `..`, a root or a drive would read outside the
-/// target. Never `run/`, where dbt wraps the select in the statement that
+/// folder dbt compiled into. Never `run/`, where dbt wraps the select in the statement that
 /// builds the table, a `create ... as` or a `merge` (0033).
 fn compiled_path(node: &Node, root: &str, fusion: bool) -> Option<String> {
     let plain = |name: &str| !matches!(name, "" | "." | "..") && !name.contains(['/', '\\', ':']);
     if !plain(&node.package) || node.file.starts_with(['/', '\\']) {
         return None;
     }
-    let mut parts = vec!["compiled", node.package.as_str()];
+    let mut parts = vec![node.package.as_str()];
     if fusion && !root.is_empty() && node.package != root {
         parts.extend(["dbt_packages", node.package.as_str()]);
     }
@@ -1448,15 +1500,39 @@ fn fusion(dbt_version: &str) -> bool {
     dbt_version.split('.').next().and_then(|major| major.parse::<u32>().ok()).is_some_and(|major| major >= 2)
 }
 
+/// The first folder of every SQL model's compiled file, its package's name in
+/// both of dbt's layouts, or none when `read_compiled_files` has no file to
+/// look for. A folder of dbt's compiled SQL holds at least one, and those it
+/// is mistaken for, the target directory, one level too deep, the project,
+/// hold none. Every model counts, not only those left to read: a compile
+/// that left a package out, `--exclude package:...`, gives the root's models
+/// their `compiled_code` and its folder holds the root's files alone.
+fn wanted_folders(project: &Project) -> Vec<String> {
+    let fusion = fusion(&project.dbt_version);
+    let path = |n: &Node| compiled_path(n, &project.project_name, fusion);
+    let sql = || project.nodes.values().filter(|n| n.is_model() && n.is_sql());
+    if !sql().any(|n| n.sql_source == SqlSource::Missing && path(n).is_some()) {
+        return Vec::new();
+    }
+    let mut firsts: Vec<String> =
+        sql().filter_map(path).filter_map(|rel| rel.split('/').next().map(str::to_string)).collect();
+    firsts.sort();
+    firsts.dedup();
+    firsts
+}
+
 /// Gives each SQL model the manifest has no `compiled_code` for the file dbt
 /// compiled for it, the only copy a `parse` leaves, or the reason it has none
 /// (0033).
 ///
 /// The manifest wins wherever it has `compiled_code`, even empty: it was
-/// written with the graph the pass walks, and a file under `target/` may be
-/// older than both, or compiled for another target. A Python model is never
+/// written with the graph the pass walks, and a compiled file may be older
+/// than both, or compiled for another target. A Python model is never
 /// read: its compiled file is Python.
-fn read_compiled_files(project: &mut Project, target: &Path) {
+///
+/// `dir` is the folder dbt compiled into, and `label` how the report names it,
+/// before the file's path in that folder.
+fn read_compiled_files(project: &mut Project, dir: &Path, label: &str) {
     let fusion = fusion(&project.dbt_version);
     let root = project.project_name.clone();
     for node in project.nodes.values_mut() {
@@ -1464,10 +1540,10 @@ fn read_compiled_files(project: &mut Project, target: &Path) {
             continue;
         }
         let Some(rel) = compiled_path(node, &root, fusion) else {
-            node.sql_source = SqlSource::Unusable("the manifest gives it no path inside the target directory".into());
+            node.sql_source = SqlSource::Unusable("the manifest gives it no path inside the folder dbt compiles into".into());
             continue;
         };
-        let path = target.join(&rel);
+        let path = dir.join(&rel);
         // Only a file: a FIFO would hang the run, and a device never ends.
         let read = match std::fs::metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -1479,7 +1555,7 @@ fn read_compiled_files(project: &mut Project, target: &Path) {
             Ok(sql) if sql.trim().is_empty() => SqlSource::Unusable("its compiled file is empty".into()),
             Ok(sql) => {
                 node.sql = sql;
-                SqlSource::File(rel)
+                SqlSource::File(format!("{label}/{rel}"))
             }
             Err(e) => SqlSource::Unusable(format!("its compiled file cannot be read: {e}")),
         };
@@ -1772,7 +1848,7 @@ mod tests {
         let mut p = project_of(nodes);
         p.project_name = "shop".into();
         p.dbt_version = version.into();
-        read_compiled_files(&mut p, &target.0);
+        read_compiled_files(&mut p, &target.0.join("compiled"), "compiled");
         p
     }
 
@@ -1862,7 +1938,7 @@ mod tests {
         for name in ["up", "root", "drive", "climbing"] {
             let n = &p.nodes[&format!("model.shop.{name}")];
             assert_eq!(n.sql, "", "{name}");
-            let why = "no compiled_code, and the manifest gives it no path inside the target directory";
+            let why = "no compiled_code, and the manifest gives it no path inside the folder dbt compiles into";
             assert_eq!(n.no_sql().as_deref(), Some(why), "{name}");
         }
     }
@@ -3283,6 +3359,134 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_manifest_named_alone_is_read_with_what_lies_beside_it() {
+        // Another machine's parse, copied here with its catalog, and the SQL
+        // it compiled in a folder of its own: no project around any of it.
+        // The cache and the report go beside the manifest, never into the
+        // folder the command ran in (0046).
+        let t = Target::new("artifacts");
+        let manifest = serde_json::json!({
+            "metadata": {"dbt_version": "1.11.8", "project_name": "shop", "adapter_type": "snowflake"},
+            "sources": {"source.shop.raw.orders": {
+                "name": "orders", "resource_type": "source", "relation_name": "db.raw.orders"}},
+            "nodes": {"model.shop.orders": {
+                "name": "orders", "resource_type": "model", "relation_name": "db.sales.orders",
+                "package_name": "shop", "original_file_path": "models/orders.sql",
+                "depends_on": {"nodes": ["source.shop.raw.orders"]},
+                "config": {"materialized": "table"}}},
+            "parent_map": {"model.shop.orders": ["source.shop.raw.orders"]}
+        });
+        let entry = |schema: &str, name: &str| {
+            serde_json::json!({"metadata": {"database": "DB", "schema": schema, "name": name},
+                "columns": {"ID": {"name": "ID"}, "AMOUNT": {"name": "AMOUNT"}}})
+        };
+        let catalog = serde_json::json!({
+            "sources": {"source.shop.raw.orders": entry("RAW", "ORDERS")},
+            "nodes": {"model.shop.orders": entry("SALES", "ORDERS")}
+        });
+        t.write("artifacts/manifest.json", manifest.to_string());
+        t.write("artifacts/catalog.json", catalog.to_string());
+        t.write("sql/shop/models/orders.sql", "select id, amount from db.raw.orders");
+
+        let mut o = Options::new(t.0.join("elsewhere"));
+        o.manifest = Some(t.0.join("artifacts").join("manifest.json"));
+        o.compiled = Some(t.0.join("sql"));
+        let file = format!("{}/shop/models/orders.sql", t.0.join("sql").display());
+        let loaded = load(&o).unwrap();
+        assert_eq!(loaded.project.nodes["model.shop.orders"].sql_source, SqlSource::File(file));
+
+        let got = generate(&o).unwrap();
+        assert_eq!(got.out, t.0.join("artifacts").join("column_lineage.collin.json"));
+        assert_eq!(got.report, t.0.join("artifacts").join("column_lineage.report.json"));
+        assert!(got.out.is_file() && got.report.is_file());
+        assert!(!t.0.join("elsewhere").exists(), "nothing is written where the project would be");
+        let totals = (got.totals.sql_from_files, got.totals.confirmed, got.totals.edges_parsed);
+        assert_eq!(totals, (1, 1, 2), "the SQL is the folder's, the catalog the one beside the manifest");
+        let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&got.report).unwrap()).unwrap();
+        assert_eq!(report["compiled_files"], t.0.join("sql").display().to_string());
+
+        // A folder mistyped is refused, rather than read as empty with every
+        // model matched by name, and nothing is written.
+        std::fs::remove_file(&got.out).unwrap();
+        o.compiled = Some(t.0.join("sqll"));
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("--compiled") && refused.contains("not a folder"), "{refused}");
+        assert!(!got.out.exists());
+
+        // So is a folder holding none of the folders its files would be in:
+        // the target directory, which says where compiled/ is, and a folder
+        // one level too deep. Each would read no file either.
+        t.write("target/compiled/shop/models/orders.sql", "select id, amount from db.raw.orders");
+        o.compiled = Some(t.0.join("target"));
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("(shop)") && refused.contains("so it is the target directory"), "{refused}");
+        assert!(refused.contains(&t.0.join("target").join("compiled").display().to_string()), "{refused}");
+        o.compiled = Some(t.0.join("target").join("compiled").join("shop"));
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("none of the folders") && !refused.contains("target directory"), "{refused}");
+        assert!(!got.out.exists());
+        o.compiled = Some(t.0.clone());
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("none of the folders") && !refused.contains("target directory"), "{refused}");
+        o.compiled = Some(t.0.join("target").join("compiled"));
+        assert_eq!(generate(&o).unwrap().totals.sql_from_files, 1);
+    }
+
+    #[test]
+    fn a_compiled_folder_is_known_by_any_model_it_holds() {
+        // A build that left a package out gives the root's models their
+        // compiled_code and the package's none: the folder it compiled into
+        // holds the root's files alone, and is the right one, with nothing
+        // in it for the package.
+        let t = Target::new("target");
+        let model = |pkg: &str, name: &str| {
+            serde_json::json!({"name": name, "resource_type": "model", "relation_name": format!("db.{pkg}.{name}"),
+                "package_name": pkg, "original_file_path": format!("models/{name}.sql"),
+                "config": {"materialized": "table"}})
+        };
+        let mut orders = model("shop", "orders");
+        orders["compiled_code"] = "select 1 as id".into();
+        let mut manifest = serde_json::json!({
+            "metadata": {"dbt_version": "1.11.8", "project_name": "shop", "adapter_type": "snowflake"},
+            "nodes": {"model.shop.orders": orders, "model.util.dates": model("util", "dates")}
+        });
+        t.write("target/manifest.json", manifest.to_string());
+        t.write("target/compiled/shop/models/orders.sql", "select 1 as id");
+
+        let mut o = Options::new(t.0.clone());
+        o.compiled = Some(t.0.join("target").join("compiled"));
+        assert_eq!(generate(&o).unwrap().totals.sql_from_files, 0);
+        o.compiled = Some(t.0.join("target"));
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("(shop, util)") && refused.contains("so it is the target directory"), "{refused}");
+
+        // Without project_name the folders are the packages' all the same.
+        manifest["metadata"].as_object_mut().unwrap().remove("project_name");
+        t.write("target/manifest.json", manifest.to_string());
+        let refused = generate(&o).err().unwrap_or_default();
+        assert!(refused.contains("(shop, util)") && refused.contains("so it is the target directory"), "{refused}");
+
+        // With every model's compiled_code there is nothing to read, and
+        // nothing to refuse.
+        manifest["nodes"]["model.util.dates"]["compiled_code"] = "select 1 as day".into();
+        t.write("target/manifest.json", manifest.to_string());
+        assert_eq!(generate(&o).unwrap().totals.sql_from_files, 0);
+    }
+
+    #[test]
+    fn a_compiled_folder_is_named_whole_in_the_report() {
+        // The report is read from beside the manifest, so a file named from
+        // where collin ran would lead nowhere.
+        let mut o = Options::new(PathBuf::from("."));
+        o.compiled = Some(PathBuf::from("ci/sql/compiled/"));
+        let whole = std::env::current_dir().unwrap().join("ci").join("sql").join("compiled");
+        assert_eq!(o.compiled_dir(), whole);
+        assert_eq!(o.compiled_label(), whole.display().to_string());
+        o.compiled = None;
+        assert_eq!(o.compiled_label(), "compiled", "the default keeps the name dbt-edith joins to the target directory");
+    }
+
     /// A public project, read from the manifest and the catalog dbt wrote for
     /// it, where every other test hands the pass what a test wrote (0038). The
     /// caches it gave are committed beside it, so an edge that moves fails here.
@@ -3294,13 +3498,13 @@ mod tests {
         for (indirect, name) in [(false, "cache.json"), (true, "cache.indirect.json")] {
             let mut o = Options::new(project.clone());
             o.indirect = indirect;
-            o.out = target.0.join(name);
-            o.report = target.0.join("report.json");
+            o.out = Some(target.0.join(name));
+            o.report = Some(target.0.join("report.json"));
             generate(&o).unwrap();
             let read = |p: &Path| -> serde_json::Value {
                 serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
             };
-            let mut got = read(&o.out);
+            let mut got = read(&o.out_path());
             // What two runs of the same code differ in, as AGENTS.md hashes it.
             let fields = got.as_object_mut().unwrap();
             fields.remove("generated_at");

@@ -51,6 +51,7 @@ is built this way, for whoever changes it next.
 | [0043](0043-a-source-without-columns-is-the-catalog-s-finding.md) | A source without columns is the catalog's finding | changing what is said of a parent the engine was not told of, or proposing that collin read a warehouse's information schema |
 | [0044](0044-a-star-expands-in-its-table-s-order.md) | A star expands in its table's order | sorting a column list the engine is handed, comparing two column lists as lists, or reading the catalog, the YAML or a compile's outputs into the store |
 | [0045](0045-a-root-goes-in-the-cache-with-its-value.md) | A root goes in the cache with its value | changing what `Resolved::roots` carries, adding a field to the cache, or drawing an edge into a column built from no column |
+| [0046](0046-a-manifest-named-alone-is-read-with-what-lies-beside-it.md) | A manifest named alone is read with what lies beside it | changing where a path `generate` reads or writes defaults to, or where a model's compiled file is looked for |
 
 ## The other side of the boundary
 

@@ -42,8 +42,9 @@ pub struct Report {
     pub project: String,
     pub dbt_version: String,
     pub adapter: String,
-    /// Where the compiled files were looked for, beside the manifest, when it
-    /// had no `compiled_code` for some model (0033).
+    /// Where the compiled files were looked for when the manifest had no
+    /// `compiled_code` for some model: `compiled/` beside it (0033), or the
+    /// folder `--compiled` named, made whole (0046).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub compiled_files: String,
     pub totals: Totals,
@@ -120,8 +121,9 @@ pub struct Totals {
     /// `run` that did not select them (0033).
     pub without_compiled_code: usize,
     /// Of those, the models whose SQL is the file a compile left in the
-    /// `compiled/` directory beside the manifest. Such a file can be older than
-    /// the manifest, and compiled for another target.
+    /// `compiled/` directory beside the manifest, or in the folder `--compiled`
+    /// named. Such a file can be older than the manifest, and compiled for
+    /// another target.
     pub sql_from_files: usize,
     /// Of those, the ones whose file reads a relation the manifest does not
     /// give the model, compiled against another graph, so set aside: their
@@ -227,8 +229,10 @@ pub struct ModelReport {
     pub name: String,
     pub unique_id: String,
     pub file: String,
-    /// The compiled file the SQL was read from, under the target directory,
-    /// when the manifest had no `compiled_code` for the model (0033).
+    /// The compiled file the SQL was read from, when the manifest had no
+    /// `compiled_code` for the model (0033): `compiled/<package>/...` under
+    /// the target directory, or a whole path in the folder `--compiled` named
+    /// (0046).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sql_file: Option<String>,
     /// That file reads a relation the manifest does not give the model, listed
