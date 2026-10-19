@@ -17,7 +17,7 @@ is accepted with `COLLIN_BLESS=1 cargo test --release committed_beside`, and
 the diff of `expected/` goes into the pull request. Neither is Snowflake, so
 they do not replace what follows.
 
-Then, against a real project outside this tree:
+Then, against a demo project outside this tree:
 
 ```
 cargo run --release -p collin-cli -- generate --project /path/to/dbt-project
@@ -60,8 +60,9 @@ diff -r /tmp/collin/before/dump $O/dump                     # what the engine sa
   Where an edge comes from and what role it plays are shown only as the pass
   published them, never worked out again, so the dump cannot describe an older
   pass.
-- **The figures go in the commit message, the names never do.** Everything these
-  commands write is the project's.
+- **Compare on demo projects.** A commit message or a pull request gives their
+  figures, Jaffle Shop's and Shopify's, with what was compared and whether it
+  agreed, or what moved and why.
 
 ## Rules
 
