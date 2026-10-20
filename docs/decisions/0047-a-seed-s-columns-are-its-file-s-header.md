@@ -57,8 +57,7 @@ dbt-common:
   and the file under it is held to the same rule.
 - **The header is parsed by hand, as Python's `csv` does**: one BOM, the
   seed's `delimiter` when it is one character, `"` quoting with `""` for a
-  quote, CRLF. Names are lower cased, as the
-  catalog's and the YAML's are.
+  quote, CRLF. Names are lower cased, as the catalog's and the YAML's are.
 - **No list rather than a guessed one.** Each of these leaves the seed with no
   list: a delimiter of more than one character (dbt raises); an empty name,
   which includes a delimiter left trailing; two names equal once lower cased;
@@ -81,6 +80,10 @@ dbt-common:
   `root_path`: the manifest does not record it.
 - **A seed path outside the project** (`seed-paths: ["../shared/seeds"]`) is
   refused, by the rule above, and the seed stays unknown.
+- **A manifest parsed with a relative `--project-dir`** carries a relative
+  `root_path`, which is never tried: a relative path depends on a working
+  folder collin cannot know (0046). Seeds are then read only from the project
+  folder collin is given.
 
 ## Rejected
 

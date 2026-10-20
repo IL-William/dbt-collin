@@ -112,9 +112,9 @@ Column lists come from three places, kept apart on purpose:
 - **computed**: what this compile's SQL would produce.
 
 A seed with no catalog entry has a fourth, read only for it: the header of its
-CSV, which is what `dbt seed` loads. It needs the project's folder (or the
-manifest's `root_path`, if that exists on this machine), ranks below the
-catalog, and is shown in the report as `seed_file`
+CSV, which is what `dbt seed` loads. It needs the project's folder (or an
+absolute `root_path` holding a `dbt_project.yml`, from the manifest), ranks
+below the catalog, and is shown in the report as `seed_file`
 ([0047](docs/decisions/0047-a-seed-s-columns-are-its-file-s-header.md)).
 
 Computed disagreeing with the warehouse means the compile is degraded: a macro
