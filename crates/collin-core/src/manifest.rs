@@ -41,6 +41,10 @@ pub struct RawNode {
     pub package_name: String,
     #[serde(default)]
     pub original_file_path: String,
+    /// The project's folder on the machine that parsed it. Only a seed's file is
+    /// ever looked for there, and only when it is not under the project given.
+    #[serde(default)]
+    pub root_path: Option<String>,
     #[serde(default)]
     pub relation_name: Option<String>,
     /// Absent until dbt compiles the node, and present, if empty, once it has:
@@ -99,6 +103,9 @@ pub struct RawDependsOn {
 pub struct RawConfig {
     #[serde(default)]
     pub materialized: Option<String>,
+    /// A seed's CSV delimiter, `,` when absent.
+    #[serde(default)]
+    pub delimiter: Option<String>,
 }
 
 impl RawManifest {
@@ -125,6 +132,13 @@ pub struct Node {
     /// Column names as declared in YAML, lower case, in the YAML's order.
     pub declared: Vec<String>,
     pub parents: Vec<String>,
+    /// A seed's `root_path` and `delimiter` config, empty when the manifest has
+    /// none or for any other node.
+    pub root_path: String,
+    pub delimiter: String,
+    /// A seed's column names from its CSV header, lower case, in the file's
+    /// order. Empty until `read_seed_headers` finds a header it can trust (0047).
+    pub file_columns: Vec<String>,
 }
 
 /// Where a model's SQL came from (0033).
@@ -273,6 +287,9 @@ impl Project {
                     },
                     declared,
                     parents: parents_of(uid, &n.depends_on),
+                    root_path: n.root_path.clone().unwrap_or_default(),
+                    delimiter: n.config.delimiter.clone().unwrap_or_default(),
+                    file_columns: Vec::new(),
                 },
             );
         }
@@ -397,6 +414,9 @@ mod tests {
                 sql_source: SqlSource::Manifest,
                 declared: Vec::new(),
                 parents: parents.iter().map(|s| s.to_string()).collect(),
+                root_path: String::new(),
+                delimiter: String::new(),
+                file_columns: Vec::new(),
             },
         )
     }
@@ -415,6 +435,7 @@ mod tests {
                     resource_type: "source".into(),
                     package_name: String::new(),
                     original_file_path: String::new(),
+                    root_path: None,
                     relation_name: Some("\"DB\".\"sch\".\"tbl\"".into()),
                     compiled_code: None,
                     language: None,

@@ -63,6 +63,9 @@ pub struct Options {
     /// them in dbt-lens, not knowing them.
     pub indirect: bool,
     pub target: String,
+    /// `--project` was given. A manifest named without it is read alone
+    /// (0046), and the folder collin ran in is no project to look in (0047).
+    pub project_named: bool,
 }
 
 impl Options {
@@ -77,7 +80,14 @@ impl Options {
             infer: true,
             indirect: false,
             target: String::new(),
+            project_named: false,
         }
+    }
+    /// The folder a seed's CSV is looked for in: the project, unless the
+    /// manifest was named alone, when it is another machine's artifact and
+    /// only its own `root_path` can say where its seeds are (0047).
+    fn project_dir(&self) -> Option<&Path> {
+        (self.manifest.is_none() || self.project_named).then_some(self.project.as_path())
     }
     fn manifest_path(&self) -> PathBuf {
         self.manifest.clone().unwrap_or_else(|| self.project.join("target").join("manifest.json"))
@@ -256,6 +266,7 @@ pub fn load(opts: &Options) -> Result<Loaded, String> {
     } else {
         Default::default()
     };
+    read_seed_headers(&mut project, opts.project_dir(), &witness.columns);
     Ok(Loaded { project, warehouse: witness.columns, catalog_elsewhere: witness.elsewhere })
 }
 
@@ -282,6 +293,9 @@ pub fn run_observed(
     let declared: HashMap<String, Vec<String>> =
         project.nodes.values().map(|n| (n.uid.clone(), n.declared.clone())).collect();
     let mut store = Store::new(declared, warehouse);
+    for node in project.nodes.values().filter(|n| !n.file_columns.is_empty()) {
+        store.set_file(&node.uid, node.file_columns.clone());
+    }
 
     let mut edges: Vec<cache::Edge> = Vec::new();
     let mut roots: Vec<cache::Root> = Vec::new();
@@ -1562,6 +1576,186 @@ fn read_compiled_files(project: &mut Project, dir: &Path, label: &str) {
     }
 }
 
+/// The most of a seed's file read to find the end of its header. A header
+/// longer than this is a file that is not one.
+const HEADER_LIMIT: usize = 1 << 20;
+
+/// Gives each seed the columns of its CSV header, which is what `dbt seed`
+/// loads and so what the table has, when no run built it yet (0047).
+///
+/// A seed the catalog has is left alone: the store ranks the catalog first, so
+/// its file would be read for nothing. A header this cannot trust leaves the
+/// seed with no list, since a guessed one is worse than none.
+///
+/// `dir` is the folder the manifest was parsed in, none when the manifest was
+/// named alone (0046): the folder collin ran in is then another project's, if
+/// anyone's. A Fusion manifest's `root_path` names a folder on another machine
+/// and is only tried last.
+fn read_seed_headers(project: &mut Project, dir: Option<&Path>, warehouse: &HashMap<String, Vec<String>>) {
+    let root = project.project_name.clone();
+    for node in project.nodes.values_mut().filter(|n| n.kind == "seed") {
+        if warehouse.get(&node.uid).is_some_and(|c| !c.is_empty()) {
+            continue;
+        }
+        let Some(rel) = seed_path(node) else { continue };
+        // dbt raises on a delimiter of more than one character.
+        let delimiter = match node.delimiter.chars().collect::<Vec<_>>().as_slice() {
+            [] => ',',
+            [one] => *one,
+            _ => continue,
+        };
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Some(dir) = dir {
+            // Without the project's name no seed is known for the root's.
+            if !root.is_empty() && node.package == root {
+                candidates.push(dir.join(&rel));
+            } else {
+                candidates.push(dir.join("dbt_packages").join(&node.package).join(&rel));
+            }
+        }
+        if !node.root_path.is_empty() {
+            candidates.push(Path::new(&node.root_path).join(&rel));
+        }
+        for path in candidates {
+            // Only a file: a FIFO would hang the run, and a device never ends.
+            match std::fs::metadata(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Ok(meta) if meta.is_file() => {}
+                _ => break,
+            }
+            node.file_columns = read_header(&path, delimiter).unwrap_or_default();
+            break;
+        }
+    }
+}
+
+/// A seed's path under the folder it is looked for in, `/` separated whatever
+/// the machine that parsed the project used. None for anything that is not a
+/// `.csv` file inside that folder: the path comes from the manifest, and a file
+/// outside the project is not read for a header (as for a compiled file).
+fn seed_path(node: &Node) -> Option<String> {
+    let package = node.package.as_str();
+    if matches!(package, ".." | ".") || package.contains(['/', '\\', ':']) {
+        return None;
+    }
+    if node.file.starts_with(['/', '\\']) || !node.file.to_ascii_lowercase().ends_with(".csv") {
+        return None;
+    }
+    let parts: Vec<&str> = node.file.split(['/', '\\']).filter(|p| !p.is_empty() && *p != ".").collect();
+    if parts.is_empty() || parts.iter().any(|p| *p == ".." || p.contains(':')) {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// The columns of the first record of the CSV at `path`, lower case, or None
+/// when it cannot be trusted as the list `dbt seed` loaded.
+///
+/// Read a chunk at a time until the record ends, so a header of any usual
+/// width is read whole and a file with no end to it is given up on at
+/// `HEADER_LIMIT`.
+fn read_header(path: &Path, delimiter: char) -> Option<Vec<String>> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let (mut bytes, mut chunk) = (Vec::new(), [0u8; 8192]);
+    loop {
+        let n = file.read(&mut chunk).ok()?;
+        let eof = n == 0;
+        bytes.extend_from_slice(&chunk[..n]);
+        let (text, cut) = match std::str::from_utf8(&bytes) {
+            Ok(text) => (text, false),
+            // Not UTF-8, or a character the chunk ended in the middle of.
+            Err(e) => (std::str::from_utf8(&bytes[..e.valid_up_to()]).ok()?, e.error_len().is_none() && !eof),
+        };
+        let (names, end) = first_record(text, delimiter);
+        let whole = text.len() == bytes.len();
+        if end == End::Newline {
+            return checked(names);
+        }
+        if eof {
+            return if end == End::Eof && whole { checked(names) } else { None };
+        }
+        // Given up on: too long, or not UTF-8 before the record ends.
+        if bytes.len() >= HEADER_LIMIT || (!whole && !cut) {
+            return None;
+        }
+    }
+}
+
+/// How the text ended the record `first_record` read.
+#[derive(PartialEq, Eq, Debug)]
+enum End {
+    Newline,
+    /// Without a newline: whole if the file ends here, cut if it goes on.
+    Eof,
+    /// Inside quotes, which the file never closes within the text.
+    Quote,
+}
+
+/// The first record of `text` as dbt reads it (Python's `csv` module, its
+/// default dialect with `delimiter`, after one BOM): a field begins with `"` to
+/// be quoted, `""` is a quote within it, and a newline within quotes stays in
+/// the name.
+fn first_record(text: &str, delimiter: char) -> (Vec<String>, End) {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut names: Vec<String> = Vec::new();
+    let (mut field, mut quoted, mut begins) = (String::new(), false, true);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if quoted {
+            match (c, chars.peek()) {
+                ('"', Some('"')) => {
+                    field.push('"');
+                    chars.next();
+                }
+                ('"', _) => quoted = false,
+                _ => field.push(c),
+            }
+        } else if c == '"' && begins {
+            quoted = true;
+            begins = false;
+        } else if c == delimiter {
+            names.push(std::mem::take(&mut field));
+            begins = true;
+        } else if c == '\n' || c == '\r' {
+            names.push(field);
+            return (names, End::Newline);
+        } else {
+            field.push(c);
+            begins = false;
+        }
+    }
+    names.push(field);
+    (names, if quoted { End::Quote } else { End::Eof })
+}
+
+/// The names as columns, or None when they are not the list `dbt seed` made:
+/// - an empty name, or two equal once lower cased: agate renames those in a
+///   way the file does not show;
+/// - a name with a space at either end: dbt-snowflake does not quote a seed's
+///   columns by default, so the table has the name without it.
+///
+/// A list that is not the table's would put an edge on a column it lacks.
+fn checked(names: Vec<String>) -> Option<Vec<String>> {
+    if names.iter().any(|n| n.is_empty() || n.trim() != n) {
+        return None;
+    }
+    let names: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
+    let mut seen = HashSet::new();
+    names.iter().all(|n| seen.insert(n.as_str())).then_some(names)
+}
+
+/// The columns of the first record of `text`, for a test of the rules above;
+/// `more` says the text was cut.
+#[cfg(test)]
+fn csv_header(text: &str, delimiter: char, more: bool) -> Option<Vec<String>> {
+    match first_record(text, delimiter) {
+        (names, End::Newline) => checked(names),
+        (names, End::Eof) if !more => checked(names),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1582,6 +1776,9 @@ mod tests {
                 sql_source: SqlSource::Manifest,
                 declared: declared.iter().map(|s| s.to_string()).collect(),
                 parents: parents.iter().map(|s| s.to_string()).collect(),
+                root_path: String::new(),
+                delimiter: String::new(),
+                file_columns: Vec::new(),
             },
         )
     }
@@ -2927,6 +3124,283 @@ mod tests {
             shape(&r.edges).into_iter().filter(|e| e.2 == "model.p.hard").collect();
         let stated = ("rel:raw_db.dbo.orders_base", "id", "model.p.hard", "id", "passthrough");
         assert_eq!(into_hard, vec![stated]);
+    }
+
+    /// A seed of `package` at `file`.
+    fn seed_at(package: &str, name: &str, file: &str) -> (String, Node) {
+        let mut n = node(&format!("seed.{package}.{name}"), &format!("db.seeds.{name}"), &[], &[]);
+        n.1.kind = "seed".into();
+        n.1.file = file.into();
+        n
+    }
+
+    /// Each seed's name and the header read for it, the manifest being one of
+    /// the project `name`, parsed in `dir` or read alone.
+    fn headers_in(dir: Option<&Path>, name: &str, seeds: Vec<(String, Node)>) -> Vec<(String, Vec<String>)> {
+        let mut p = project_of(seeds);
+        p.project_name = name.into();
+        read_seed_headers(&mut p, dir, &HashMap::new());
+        let mut got: Vec<_> = p.nodes.values().map(|n| (n.uid.rsplit('.').next().unwrap().to_string(), n.file_columns.clone())).collect();
+        got.sort();
+        got
+    }
+
+    fn headers(t: &Target, seeds: Vec<(String, Node)>) -> Vec<(String, Vec<String>)> {
+        headers_in(Some(&t.0), "p", seeds)
+    }
+
+    #[test]
+    fn a_header_is_read_as_dbt_reads_a_csv() {
+        let h = |text: &str, delimiter: char| csv_header(text, delimiter, false);
+        assert_eq!(h("Code,Label\n1,a\n", ','), Some(cols(&["code", "label"])));
+        assert_eq!(h("\u{feff}Code,Label", ','), Some(cols(&["code", "label"])), "a BOM, and no newline");
+        assert_eq!(h("Code;Label\r\n1;a\r\n", ';'), Some(cols(&["code", "label"])), "CRLF, and a delimiter");
+        assert_eq!(h("Code;Label\n", ','), Some(cols(&["code;label"])), "one name when the delimiter is another");
+        assert_eq!(h("\"Code, old\",\"say \"\"hi\"\"\",x\"y\n", ','), Some(cols(&["code, old", "say \"hi\"", "x\"y"])));
+        assert_eq!(h("\"two\nlines\",b\n", ','), Some(cols(&["two\nlines", "b"])), "a newline within quotes");
+        assert_eq!(h("a,\"b\"c,d", ','), Some(cols(&["a", "bc", "d"])), "text after a closing quote stays");
+        assert_eq!(h("only", ','), Some(cols(&["only"])));
+        // A list that is not the one dbt loaded is worse than none.
+        assert_eq!(h("a,,c\n", ','), None, "agate names an empty column itself");
+        assert_eq!(h("a,A\n", ','), None, "two names that compare equal");
+        assert_eq!(h("\n1,2\n", ','), None, "a blank first line");
+        assert_eq!(h("code, label\n", ','), None, "a space dbt-snowflake would not keep in the column");
+        assert_eq!(h("code ,label\n", ','), None);
+        assert_eq!(h("code,label,\n", ','), None, "a delimiter left trailing");
+        assert_eq!(h("\" code\",label\n", ','), None, "quoted, still not the column");
+        assert_eq!(h("", ','), None);
+        assert_eq!(h("a,\"b\n", ','), None, "a quote never closed");
+        assert_eq!(csv_header("a,b", ',', true), None, "a record cut by the limit");
+        assert_eq!(csv_header("a,b\nc", ',', true), Some(cols(&["a", "b"])), "a cut after the record");
+    }
+
+    #[test]
+    fn a_seed_is_looked_for_where_dbt_loads_it_from() {
+        let t = Target::new("seed-paths");
+        t.write("seeds/codes.csv", "\u{feff}Code,Label\n1,a\n");
+        t.write("seeds/nested/rates.CSV", "Rate;Year\n");
+        t.write("dbt_packages/util/seeds/units.csv", "Unit,Factor\n");
+        t.write("seeds/units.csv", "Not,Ours\n");
+        t.write("elsewhere/seeds/away.csv", "Here,There\n");
+        t.write("seeds/dup.csv", "a,A\n");
+        t.write("notes.txt", "Secret,Name\n");
+        t.write("seeds/blank.csv", "");
+        let mut away = seed_at("p", "away", "seeds/away.csv");
+        away.1.root_path = t.0.join("elsewhere").to_string_lossy().into_owned();
+        let mut rates = seed_at("p", "rates", "seeds\\nested\\rates.CSV");
+        rates.1.delimiter = ";".into();
+        let got = headers(
+            &t,
+            vec![
+                seed_at("p", "codes", "seeds/codes.csv"),
+                rates,
+                seed_at("util", "units", "seeds/units.csv"),
+                away,
+                seed_at("p", "dup", "seeds/dup.csv"),
+                seed_at("p", "blank", "seeds/blank.csv"),
+                seed_at("p", "gone", "seeds/gone.csv"),
+                seed_at("p", "up", "../notes.txt"),
+                seed_at("p", "text", "notes.txt"),
+                seed_at("p", "abs", "/etc/hosts.csv"),
+                seed_at("p", "drive", "C:\\seeds\\codes.csv"),
+            ],
+        );
+        let got: HashMap<&str, &[String]> = got.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
+        assert_eq!(got["codes"], cols(&["code", "label"]).as_slice());
+        assert_eq!(got["rates"], cols(&["rate", "year"]).as_slice(), "a delimiter, a `\\` path");
+        assert_eq!(got["units"], cols(&["unit", "factor"]).as_slice(), "an installed package's, not the root's");
+        assert_eq!(got["away"], cols(&["here", "there"]).as_slice(), "root_path comes last");
+        for none in ["dup", "blank", "gone", "up", "text", "abs", "drive"] {
+            assert!(got[none].is_empty(), "{none}");
+        }
+    }
+
+    #[test]
+    fn a_header_is_read_whole_and_a_file_with_no_end_is_given_up_on() {
+        let t = Target::new("seed-wide");
+        let wide: Vec<String> = (0..3000).map(|i| format!("Column_{i}")).collect();
+        t.write("seeds/wide.csv", format!("{}\n1,2\n", wide.join(",")));
+        t.write("seeds/endless.csv", "a".repeat(HEADER_LIMIT + 1));
+        t.write("seeds/quote.csv", format!("\"{}", "a".repeat(HEADER_LIMIT + 1)));
+        t.write("seeds/latin.csv", [b'a', b',', 0xe9, b'\n']);
+        t.write("seeds/late.csv", b"a,b\n\xe9\n");
+        t.write("seeds/accent.csv", format!("{}\u{e9}t\u{e9},b\n", "x".repeat(8191)));
+        let got = headers(
+            &t,
+            ["wide", "endless", "quote", "latin", "late", "accent"]
+                .map(|n| seed_at("p", n, &format!("seeds/{n}.csv")))
+                .into_iter()
+                .collect(),
+        );
+        let got: HashMap<&str, &[String]> = got.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
+        assert_eq!(got["wide"].len(), 3000);
+        assert_eq!(got["wide"][2999], "column_2999");
+        assert!(got["endless"].is_empty() && got["quote"].is_empty());
+        assert!(got["latin"].is_empty(), "not UTF-8 in the header");
+        assert_eq!(got["late"], cols(&["a", "b"]).as_slice(), "nothing amiss in the header itself");
+        assert_eq!(got["accent"].len(), 2, "a character split between two reads");
+    }
+
+    #[test]
+    fn a_delimiter_of_more_than_one_character_keeps_no_list() {
+        let t = Target::new("seed-delimiter");
+        t.write("seeds/a.csv", "a;;b\n");
+        let mut a = seed_at("p", "a", "seeds/a.csv");
+        a.1.delimiter = ";;".into();
+        assert!(headers(&t, vec![a])[0].1.is_empty(), "dbt raises on it");
+    }
+
+    #[test]
+    fn a_path_climbing_out_of_the_project_is_refused_whatever_is_there() {
+        // A real .csv, with a header that would be taken, beside the project.
+        let t = Target::new("seed-climb");
+        t.write("shared/x.csv", "Code,Label\n");
+        t.write("proj/seeds/y.csv", "Code,Label\n");
+        let got = headers_in(
+            Some(&t.0.join("proj")),
+            "p",
+            vec![seed_at("p", "x", "../shared/x.csv"), seed_at("p", "z", "seeds/../../shared/x.csv"), seed_at("p", "y", "seeds/y.csv")],
+        );
+        let got: HashMap<&str, &[String]> = got.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
+        assert!(got["x"].is_empty() && got["z"].is_empty());
+        assert_eq!(got["y"].len(), 2, "the same folder, a path inside it");
+    }
+
+    #[test]
+    fn the_project_s_file_is_read_before_the_one_in_root_path() {
+        let t = Target::new("seed-order");
+        t.write("proj/seeds/x.csv", "Here,Now\n");
+        t.write("away/seeds/x.csv", "There,Then\n");
+        let mut x = seed_at("p", "x", "seeds/x.csv");
+        x.1.root_path = t.0.join("away").to_string_lossy().into_owned();
+        let got = headers_in(Some(&t.0.join("proj")), "p", vec![x]);
+        assert_eq!(got[0].1, cols(&["here", "now"]));
+    }
+
+    #[test]
+    fn without_the_project_s_name_no_seed_is_the_root_s() {
+        // The manifest does not say which package is the root, so the project's
+        // own folder is not the place for any seed: only an installed package's
+        // folder, or root_path.
+        let t = Target::new("seed-nameless");
+        t.write("proj/seeds/x.csv", "Root,Only\n");
+        t.write("proj/dbt_packages/p/seeds/y.csv", "In,Package\n");
+        t.write("away/seeds/z.csv", "In,Root\n");
+        let mut z = seed_at("p", "z", "seeds/z.csv");
+        z.1.root_path = t.0.join("away").to_string_lossy().into_owned();
+        let got = headers_in(
+            Some(&t.0.join("proj")),
+            "",
+            vec![seed_at("p", "x", "seeds/x.csv"), seed_at("p", "y", "seeds/y.csv"), z],
+        );
+        let got: HashMap<&str, &[String]> = got.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
+        assert!(got["x"].is_empty());
+        assert_eq!(got["y"], cols(&["in", "package"]).as_slice());
+        assert_eq!(got["z"], cols(&["in", "root"]).as_slice());
+    }
+
+    /// A manifest of one seed and the model reading it by a star, written
+    /// beside nothing else, as a CI run's artifact is.
+    fn artifact(t: &Target, root_path: Option<&Path>) -> PathBuf {
+        let root = root_path.map_or(String::new(), |p| format!(r#""root_path": {:?},"#, p.to_string_lossy()));
+        t.write(
+            "artifacts/manifest.json",
+            format!(
+                r#"{{"metadata": {{"project_name": "p", "adapter_type": "snowflake", "dbt_version": "1.11.8"}},
+                "nodes": {{
+                  "seed.p.x": {{"name": "x", "resource_type": "seed", "package_name": "p", {root}
+                    "original_file_path": "seeds/x.csv", "relation_name": "db.seeds.x"}},
+                  "model.p.m": {{"name": "m", "resource_type": "model", "package_name": "p",
+                    "original_file_path": "models/m.sql", "relation_name": "db.sch.m",
+                    "compiled_code": "select * from db.seeds.x",
+                    "depends_on": {{"nodes": ["seed.p.x"]}}}}}}}}"#
+            ),
+        );
+        t.0.join("artifacts/manifest.json")
+    }
+
+    #[test]
+    fn a_manifest_named_alone_does_not_read_the_seeds_of_the_folder_it_ran_in() {
+        let t = Target::new("seed-alone");
+        // Another project's seed of the same path, with the wrong header.
+        t.write("elsewhere/seeds/x.csv", "Wrong,Header\n");
+        t.write("origin/seeds/x.csv", "Code,Label\n");
+        let edges = |o: &Options| {
+            let Loaded { project, warehouse, .. } = load(o).unwrap();
+            let r = run(&project, warehouse, o);
+            shape(&r.edges).into_iter().map(|e| (e.0.to_string(), e.1.to_string(), e.4.to_string())).collect::<Vec<_>>()
+        };
+
+        let alone = artifact(&t, None);
+        let mut o = Options::new(t.0.join("elsewhere"));
+        o.manifest = Some(alone.clone());
+        assert!(edges(&o).is_empty(), "as before: the seed's columns were not known");
+
+        // Its root_path is the manifest's own word for where its seeds are.
+        let with_root = artifact(&t, Some(&t.0.join("origin")));
+        o.manifest = Some(with_root.clone());
+        let from_origin = edges(&o);
+        assert_eq!(from_origin.iter().map(|e| e.1.as_str()).collect::<Vec<_>>(), vec!["code", "label"]);
+
+        // A project named is where the seeds are, as dbt would find them.
+        let mut o = Options::new(t.0.join("elsewhere"));
+        o.manifest = Some(alone);
+        o.project_named = true;
+        assert_eq!(edges(&o).iter().map(|e| e.1.as_str()).collect::<Vec<_>>(), vec!["header", "wrong"]);
+    }
+
+    #[test]
+    fn a_missing_catalog_leaves_no_seed_without_columns() {
+        // Three models were listed here before 0047: the seeds they read have no
+        // catalog entry, and no column in the YAML.
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join("jaffle_shop");
+        let t = Target::new("seed-no-catalog");
+        let mut o = Options::new(project);
+        o.catalog = Some(t.0.join("none.json"));
+        o.out = Some(t.0.join("cache.json"));
+        o.report = Some(t.0.join("report.json"));
+        let out = generate(&o).unwrap();
+        assert!(
+            out.findings.iter().all(|f| f.category != "parent_without_columns"),
+            "{:?}",
+            out.findings.iter().map(|f| &f.category).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_seed_with_no_catalog_and_no_yaml_gives_the_columns_of_its_header() {
+        let t = Target::new("seed-star");
+        t.write("seeds/codes.csv", "Code,Label\n1,a\n");
+        t.write("seeds/other.csv", "Code,Extra\n1,a\n");
+        let mut p = project_of(vec![
+            seed_at("p", "codes", "seeds/codes.csv"),
+            seed_at("p", "other", "seeds/other.csv"),
+            node("model.p.tagged", "db.sch.tagged", &["seed.p.codes", "seed.p.other"], &[]),
+        ]);
+        p.project_name = "p".into();
+        p.nodes.get_mut("model.p.tagged").unwrap().sql = "select * from db.seeds.codes".into();
+        // The catalog has `other` as the table was built, not as its file reads.
+        let warehouse = HashMap::from([("seed.p.other".to_string(), cols(&["code", "extra", "loaded_at"]))]);
+        read_seed_headers(&mut p, Some(&t.0), &warehouse);
+        assert!(p.nodes["seed.p.other"].file_columns.is_empty(), "a seed the catalog has is not read");
+        let mut seen: Vec<(String, &'static str, Vec<String>)> = Vec::new();
+        let r = run_observed(&p, warehouse, &opts(true, false), |s| {
+            seen.extend(s.parents.iter().map(|q| (q.node.uid.clone(), q.provenance.as_str(), q.columns.clone())));
+        });
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                ("seed.p.codes".to_string(), "seed_file", cols(&["code", "label"])),
+                ("seed.p.other".to_string(), "warehouse", cols(&["code", "extra", "loaded_at"])),
+            ],
+            "the catalog's list is the one a seed has"
+        );
+        let from: Vec<_> = shape(&r.edges).into_iter().map(|e| (e.0, e.1, e.2, e.3)).collect();
+        let tagged = "model.p.tagged";
+        assert_eq!(from, vec![("seed.p.codes", "code", tagged, "code"), ("seed.p.codes", "label", tagged, "label")]);
+        let m = r.report.models.iter().find(|m| m.unique_id == tagged);
+        assert!(m.is_none_or(|m| m.unknown_relations.is_empty()), "the seed is no longer a parent without columns");
     }
 
     #[test]

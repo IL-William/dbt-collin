@@ -9,7 +9,7 @@ is built this way, for whoever changes it next.
 | [0001](0001-lineage-from-the-compiled-sql.md) | Column lineage comes from the compiled SQL, never from a warehouse | adding a driver, a credential, or a dependency on a dbt Platform account |
 | [0002](0002-flowscope-is-the-engine.md) | flowscope-core is the engine, behind an interface that hides it | touching `engine.rs`, or proposing we write our own resolver |
 | [0003](0003-every-edge-says-where-it-came-from.md) | Every edge says where it came from | emitting an edge, or filling a gap with anything the SQL did not say |
-| [0004](0004-three-column-sources-kept-apart.md) | Three column sources, kept apart | merging the column lists in `schema.rs`, or adding a fourth source |
+| [0004](0004-three-column-sources-kept-apart.md) | Three column sources, kept apart | merging the column lists in `schema.rs`, or adding a source (0047 added a seed's file) |
 | [0005](0005-the-cache-stays-at-version-one.md) | The cache stays at version 1 | adding a field to the cache, or bumping its version |
 | [0006](0006-the-gaps-are-a-deliverable.md) | The gaps are a deliverable, not a log line | skipping a model quietly, or writing a warning and moving on |
 | [0007](0007-the-corpus-never-enters-this-repository.md) | The corpus never enters this repository | writing a fixture, a test, an example or a commit message |
@@ -52,6 +52,7 @@ is built this way, for whoever changes it next.
 | [0044](0044-a-star-expands-in-its-table-s-order.md) | A star expands in its table's order | sorting a column list the engine is handed, comparing two column lists as lists, or reading the catalog, the YAML or a compile's outputs into the store |
 | [0045](0045-a-root-goes-in-the-cache-with-its-value.md) | A root goes in the cache with its value | changing what `Resolved::roots` carries, adding a field to the cache, or drawing an edge into a column built from no column |
 | [0046](0046-a-manifest-named-alone-is-read-with-what-lies-beside-it.md) | A manifest named alone is read with what lies beside it | changing where a path `generate` reads or writes defaults to, or where a model's compiled file is looked for |
+| [0047](0047-a-seed-s-columns-are-its-file-s-header.md) | A seed's columns are its file's header | changing what is known of a seed's columns, how a CSV header is read, or which files `generate` reads from the project |
 
 ## The other side of the boundary
 

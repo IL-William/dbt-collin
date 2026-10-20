@@ -58,13 +58,17 @@ fn main() -> ExitCode {
 
 fn dump() -> Result<(usize, PathBuf), String> {
     let (mut root, mut manifest, mut catalog, mut compiled, mut out) = (PathBuf::from("."), None, None, None, None);
+    let mut project_named = false;
     let (mut infer, mut indirect) = (true, false);
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().map(PathBuf::from).ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
             "--out" => out = Some(value()?),
-            "--project" => root = value()?,
+            "--project" => {
+                root = value()?;
+                project_named = true;
+            }
             "--manifest" => manifest = Some(value()?),
             "--catalog" => catalog = Some(value()?),
             "--compiled" => compiled = Some(value()?),
@@ -76,6 +80,7 @@ fn dump() -> Result<(usize, PathBuf), String> {
     let out = out.ok_or(format!("--out is required\n\n{USAGE}"))?;
     // Only the inputs matter: the cache and the report are never written here.
     let mut opts = Options::new(root);
+    opts.project_named = project_named;
     opts.manifest = manifest;
     opts.catalog = catalog;
     opts.compiled = compiled;

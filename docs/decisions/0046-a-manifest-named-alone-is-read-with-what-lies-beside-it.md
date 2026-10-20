@@ -87,3 +87,8 @@ four paths whenever it runs collin, so it sees no change; it passes
 `--compiled` only when its own user names the folder, and that needs 0.9.0.
 The finding on compiled files set aside says collin read "the files a compile
 left" rather than `target/compiled`, which a folder named would make wrong.
+
+## Amended by 0047
+
+A manifest named alone has no project: the folder collin ran in is not looked
+in for a seed's CSV, only the manifest's own `root_path` is.
