@@ -103,9 +103,19 @@ pub struct RawDependsOn {
 pub struct RawConfig {
     #[serde(default)]
     pub materialized: Option<String>,
-    /// A seed's CSV delimiter, `,` when absent.
-    #[serde(default)]
+    /// A seed's CSV delimiter, `,` when absent. Read from every node's config,
+    /// so anything but a string (a list, a number on a model) is taken as
+    /// absent rather than failing the whole manifest.
+    #[serde(default, deserialize_with = "string_or_none")]
     pub delimiter: Option<String>,
+}
+
+fn string_or_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let value = <Option<serde_json::Value>>::deserialize(d)?;
+    Ok(match value {
+        Some(serde_json::Value::String(s)) => Some(s),
+        _ => None,
+    })
 }
 
 impl RawManifest {
@@ -381,6 +391,27 @@ mod tests {
         let names = |n: RawNode| n.columns.into_iter().map(|c| c.name).collect::<Vec<_>>();
         assert_eq!(names(node(r#"{"zeta": {"name": "zeta"}, "alpha": {"name": "alpha"}}"#)), vec!["zeta", "alpha"]);
         assert!(names(node("null")).is_empty());
+    }
+
+    #[test]
+    fn a_delimiter_that_is_not_a_string_does_not_fail_the_manifest() {
+        // Every node's config is read, and a model may carry any value under
+        // that key: dbt reads it for a seed only.
+        let manifest = r#"{"nodes": {
+            "model.p.orders": {"name": "orders", "resource_type": "model", "package_name": "p",
+                "config": {"materialized": "table", "delimiter": ["|"]}},
+            "model.p.stores": {"name": "stores", "resource_type": "model", "package_name": "p",
+                "config": {"delimiter": 3}},
+            "model.p.items": {"name": "items", "resource_type": "model", "package_name": "p",
+                "config": {"delimiter": null}},
+            "seed.p.rates": {"name": "rates", "resource_type": "seed", "package_name": "p",
+                "config": {"delimiter": ";"}}}}"#;
+        let raw: RawManifest = serde_json::from_str(manifest).unwrap();
+        let p = Project::from_manifest(raw);
+        assert_eq!(p.nodes["seed.p.rates"].delimiter, ";");
+        for model in ["orders", "stores", "items"] {
+            assert_eq!(p.nodes[&format!("model.p.{model}")].delimiter, "", "{model}");
+        }
     }
 
     #[test]

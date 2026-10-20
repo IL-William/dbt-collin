@@ -38,28 +38,32 @@ dbt-common:
   is not. A seed has no computed list, and the header is newer than the YAML.
 - **It is read in `load`, not in `run`**, as compiled files are (0033): `run`
   reads no file. The catalog is loaded first, and a seed it has is not read.
-  The file is read a chunk at a time until the first newline outside quotes,
-  and given up on, with no list, at 1 MiB.
+  The file is read in reads that double in size until the first newline
+  outside quotes, and given up on, with no list, at 1 MiB.
 - **Where, in dbt's order**: the project given, with `dbt_packages/<package>`
   for a package's seed, then the manifest's `root_path`, which only a run on
-  the machine that wrote the manifest finds. `\` is read as a separator. Only
-  a regular file is read. A manifest named alone, without `--project`, is read
+  the machine that wrote the manifest finds, and which is tried only when it is
+  an absolute path to a folder holding a `dbt_project.yml`. `\` is read as a
+  separator. Only a regular file is read; a path dbt could not stat (a parent
+  that is not a folder, no permission) is a file that is not there, and the
+  next place is tried. A manifest named alone, without `--project`, is read
   alone (0046): the folder collin ran in is not its project, so only
   `root_path` is tried. Without `metadata.project_name` no seed is known for
   the root's, and the project's own folder is not tried.
 - **The path is the manifest's, so it is confined** as a compiled file's is
   (0033): one that climbs with `..`, names a drive or does not end in `.csv` is
   not read, and a header goes into a cache. `root_path` is the exception to the
-  rule that an absolute path is not read: it is a folder, trusted as dbt trusts
-  it, and the file under it is held to the same rule.
+  rule that an absolute path is not read: it is a folder holding a dbt project,
+  and the file under it is held to the same rule.
 - **The header is parsed by hand, as Python's `csv` does**: one BOM, the
   seed's `delimiter` when it is one character, `"` quoting with `""` for a
-  quote, a newline within quotes, CRLF. Names are lower cased, as the
+  quote, CRLF. Names are lower cased, as the
   catalog's and the YAML's are.
 - **No list rather than a guessed one.** Each of these leaves the seed with no
   list: a delimiter of more than one character (dbt raises); an empty name,
   which includes a delimiter left trailing; two names equal once lower cased;
-  a name with a space at either end; a quote never closed; a header past the
+  a name with a space at either end; a name with a line break in it (Python's
+  text mode would change it); a quote never closed; a header past the
   limit; a header that is not UTF-8. Agate renames the first two in a way the
   file does not show, and dbt-snowflake does not quote a seed's columns by
   default, so ` Label` is a table's `LABEL`: the list would put an edge on a
@@ -70,8 +74,9 @@ dbt-common:
 
 ## Limits
 
-- **`root_path` is trusted as dbt trusts it.** The file named is held to the
-  rule above, the folder is not.
+- **`root_path` is trusted as a dbt project's folder.** The file named is held
+  to the rule above, the folder only to being absolute and holding a
+  `dbt_project.yml`.
 - **A `packages-install-path` other than `dbt_packages`** is found only through
   `root_path`: the manifest does not record it.
 - **A seed path outside the project** (`seed-paths: ["../shared/seeds"]`) is
@@ -88,16 +93,19 @@ dbt-common:
   dependency to keep pinned and audited for that is not worth it.
 - **Renaming an empty or repeated name as agate does.** Its rule is dbt's
   internals, not a contract, and a wrong guess gives a wrong edge.
-- **Reading `root_path` first.** In a manifest from a CI run or a VM it names a
-  folder that is not on this machine, or an older checkout of it.
+- **Reading `root_path` first.** In a manifest from a CI run or another
+  machine it names a folder that is not on this machine, or an older checkout
+  of it.
 
 ## Consequences
 
 Measured with the code before this record and with this one, on Jaffle Shop
 and Shopify with their catalogs: the expected cache committed beside each is
 still given (0038). On Jaffle Shop with no catalog the cache is the same, byte
-for byte, since its models document their columns, and `parent_without_columns` goes from three models to
-none: its seeds are no longer parents without columns.
+for byte, since its staging models name each seed column explicitly and the
+engine already traced them to the seed without its column list, and
+`parent_without_columns` goes from three models to none: its seeds are no
+longer parents without columns.
 
 A project run without a catalog, as dbt-edith may run one, now has the edges
 from every seed whose file is found and whose header is trusted.

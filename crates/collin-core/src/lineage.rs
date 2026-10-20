@@ -1580,6 +1580,11 @@ fn read_compiled_files(project: &mut Project, dir: &Path, label: &str) {
 /// longer than this is a file that is not one.
 const HEADER_LIMIT: usize = 1 << 20;
 
+/// What the first read of a header takes; each read after it takes twice the
+/// one before, so the text is decoded and scanned a few times over in all, not
+/// once per chunk.
+const HEADER_FIRST_READ: usize = 8192;
+
 /// Gives each seed the columns of its CSV header, which is what `dbt seed`
 /// loads and so what the table has, when no run built it yet (0047).
 ///
@@ -1590,7 +1595,9 @@ const HEADER_LIMIT: usize = 1 << 20;
 /// `dir` is the folder the manifest was parsed in, none when the manifest was
 /// named alone (0046): the folder collin ran in is then another project's, if
 /// anyone's. A Fusion manifest's `root_path` names a folder on another machine
-/// and is only tried last.
+/// and is only tried last, and only when it is an absolute path to a dbt
+/// project (it holds a `dbt_project.yml`): a manifest is not trusted to point
+/// collin at any folder.
 fn read_seed_headers(project: &mut Project, dir: Option<&Path>, warehouse: &HashMap<String, Vec<String>>) {
     let root = project.project_name.clone();
     for node in project.nodes.values_mut().filter(|n| n.kind == "seed") {
@@ -1613,13 +1620,16 @@ fn read_seed_headers(project: &mut Project, dir: Option<&Path>, warehouse: &Hash
                 candidates.push(dir.join("dbt_packages").join(&node.package).join(&rel));
             }
         }
-        if !node.root_path.is_empty() {
-            candidates.push(Path::new(&node.root_path).join(&rel));
+        let root_path = Path::new(&node.root_path);
+        if root_path.is_absolute() && root_path.join("dbt_project.yml").is_file() {
+            candidates.push(root_path.join(&rel));
         }
         for path in candidates {
             // Only a file: a FIFO would hang the run, and a device never ends.
+            // An error of any kind is a file that is not there, as for dbt's
+            // `os.path.exists` (a parent that is not a folder, no permission).
             match std::fs::metadata(&path) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => continue,
                 Ok(meta) if meta.is_file() => {}
                 _ => break,
             }
@@ -1651,17 +1661,20 @@ fn seed_path(node: &Node) -> Option<String> {
 /// The columns of the first record of the CSV at `path`, lower case, or None
 /// when it cannot be trusted as the list `dbt seed` loaded.
 ///
-/// Read a chunk at a time until the record ends, so a header of any usual
-/// width is read whole and a file with no end to it is given up on at
-/// `HEADER_LIMIT`.
+/// Read until the record ends, each read twice the one before, so a header of
+/// any usual width is read whole in linear time and a file with no end to it is
+/// given up on at `HEADER_LIMIT`.
 fn read_header(path: &Path, delimiter: char) -> Option<Vec<String>> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).ok()?;
-    let (mut bytes, mut chunk) = (Vec::new(), [0u8; 8192]);
+    let (mut bytes, mut next) = (Vec::new(), HEADER_FIRST_READ);
     loop {
-        let n = file.read(&mut chunk).ok()?;
-        let eof = n == 0;
-        bytes.extend_from_slice(&chunk[..n]);
+        // Never past the limit, so a file just over it is given up on as before.
+        let want = next.min(HEADER_LIMIT - bytes.len());
+        let n = (&mut file).take(want as u64).read_to_end(&mut bytes).ok()?;
+        // `read_to_end` returns short only at the end of the file.
+        let eof = n < want;
+        next = next.saturating_mul(2);
         let (text, cut) = match std::str::from_utf8(&bytes) {
             Ok(text) => (text, false),
             // Not UTF-8, or a character the chunk ended in the middle of.
@@ -1695,7 +1708,7 @@ enum End {
 /// The first record of `text` as dbt reads it (Python's `csv` module, its
 /// default dialect with `delimiter`, after one BOM): a field begins with `"` to
 /// be quoted, `""` is a quote within it, and a newline within quotes stays in
-/// the name.
+/// the name (`checked` then refuses it).
 fn first_record(text: &str, delimiter: char) -> (Vec<String>, End) {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut names: Vec<String> = Vec::new();
@@ -1732,12 +1745,14 @@ fn first_record(text: &str, delimiter: char) -> (Vec<String>, End) {
 /// The names as columns, or None when they are not the list `dbt seed` made:
 /// - an empty name, or two equal once lower cased: agate renames those in a
 ///   way the file does not show;
+/// - a name with a line break in it: Python's text mode turns `\r\n` and `\r`
+///   into `\n`, so the name dbt loaded is not the one the file holds;
 /// - a name with a space at either end: dbt-snowflake does not quote a seed's
 ///   columns by default, so the table has the name without it.
 ///
 /// A list that is not the table's would put an edge on a column it lacks.
 fn checked(names: Vec<String>) -> Option<Vec<String>> {
-    if names.iter().any(|n| n.is_empty() || n.trim() != n) {
+    if names.iter().any(|n| n.is_empty() || n.trim() != n || n.contains(['\n', '\r'])) {
         return None;
     }
     let names: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
@@ -3157,7 +3172,9 @@ mod tests {
         assert_eq!(h("Code;Label\r\n1;a\r\n", ';'), Some(cols(&["code", "label"])), "CRLF, and a delimiter");
         assert_eq!(h("Code;Label\n", ','), Some(cols(&["code;label"])), "one name when the delimiter is another");
         assert_eq!(h("\"Code, old\",\"say \"\"hi\"\"\",x\"y\n", ','), Some(cols(&["code, old", "say \"hi\"", "x\"y"])));
-        assert_eq!(h("\"two\nlines\",b\n", ','), Some(cols(&["two\nlines", "b"])), "a newline within quotes");
+        assert_eq!(h("\"two\nlines\",b\n", ','), None, "a newline within quotes, which dbt would normalise");
+        assert_eq!(h("\"two\r\nlines\",b\n", ','), None);
+        assert_eq!(first_record("\"two\nlines\",b\n", ',').0, vec!["two\nlines".to_string(), "b".into()]);
         assert_eq!(h("a,\"b\"c,d", ','), Some(cols(&["a", "bc", "d"])), "text after a closing quote stays");
         assert_eq!(h("only", ','), Some(cols(&["only"])));
         // A list that is not the one dbt loaded is worse than none.
@@ -3182,6 +3199,7 @@ mod tests {
         t.write("dbt_packages/util/seeds/units.csv", "Unit,Factor\n");
         t.write("seeds/units.csv", "Not,Ours\n");
         t.write("elsewhere/seeds/away.csv", "Here,There\n");
+        t.write("elsewhere/dbt_project.yml", "name: p\n");
         t.write("seeds/dup.csv", "a,A\n");
         t.write("notes.txt", "Secret,Name\n");
         t.write("seeds/blank.csv", "");
@@ -3271,10 +3289,67 @@ mod tests {
         let t = Target::new("seed-order");
         t.write("proj/seeds/x.csv", "Here,Now\n");
         t.write("away/seeds/x.csv", "There,Then\n");
+        t.write("away/dbt_project.yml", "name: p\n");
         let mut x = seed_at("p", "x", "seeds/x.csv");
         x.1.root_path = t.0.join("away").to_string_lossy().into_owned();
         let got = headers_in(Some(&t.0.join("proj")), "p", vec![x]);
         assert_eq!(got[0].1, cols(&["here", "now"]));
+    }
+
+    #[test]
+    fn root_path_is_tried_only_as_the_folder_of_a_dbt_project() {
+        let t = Target::new("seed-root-path");
+        // A seed of the right path, in a folder that is not a dbt project.
+        t.write("plain/seeds/x.csv", "Not,Trusted\n");
+        t.write("project/seeds/y.csv", "Is,Trusted\n");
+        t.write("project/dbt_project.yml", "name: p\n");
+        let at = |name: &str, root: &str| {
+            let mut s = seed_at("p", name, &format!("seeds/{name}.csv"));
+            s.1.root_path = root.into();
+            s
+        };
+        let got = headers_in(
+            None,
+            "p",
+            vec![
+                at("x", &t.0.join("plain").to_string_lossy()),
+                at("y", &t.0.join("project").to_string_lossy()),
+                at("z", "project"),
+            ],
+        );
+        let got: HashMap<&str, &[String]> = got.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
+        assert!(got["x"].is_empty(), "no dbt_project.yml");
+        assert_eq!(got["y"], cols(&["is", "trusted"]).as_slice());
+        assert!(got["z"].is_empty(), "a relative path");
+    }
+
+    #[test]
+    fn a_project_path_that_cannot_be_read_falls_back_to_root_path() {
+        // `seeds` is a file here, so the path under it is not a folder's: dbt's
+        // os.path.exists says no, and root_path is looked at next.
+        let t = Target::new("seed-not-a-dir");
+        t.write("proj/seeds", "not a folder");
+        t.write("away/seeds/x.csv", "Here,Now\n");
+        t.write("away/dbt_project.yml", "name: p\n");
+        let mut x = seed_at("p", "x", "seeds/x.csv");
+        x.1.root_path = t.0.join("away").to_string_lossy().into_owned();
+        let got = headers_in(Some(&t.0.join("proj")), "p", vec![x]);
+        assert_eq!(got[0].1, cols(&["here", "now"]));
+    }
+
+    #[test]
+    fn a_header_that_takes_several_doubling_reads_is_read_whole() {
+        // Several hundred KiB on one line, past the first reads, and one that
+        // ends exactly at the limit.
+        let t = Target::new("seed-long");
+        let names: Vec<String> = (0..60_000).map(|i| format!("col_{i}")).collect();
+        t.write("seeds/long.csv", format!("{}\n1\n", names.join(",")));
+        t.write("seeds/exact.csv", format!("{}\n", "a".repeat(HEADER_LIMIT - 1)));
+        let got = headers(&t, vec![seed_at("p", "long", "seeds/long.csv"), seed_at("p", "exact", "seeds/exact.csv")]);
+        let got: HashMap<&str, &[String]> = got.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
+        assert_eq!(got["long"].len(), 60_000);
+        assert_eq!(got["long"][59_999], "col_59999");
+        assert_eq!(got["exact"].len(), 1, "a header that fits the limit with its newline");
     }
 
     #[test]
@@ -3286,6 +3361,7 @@ mod tests {
         t.write("proj/seeds/x.csv", "Root,Only\n");
         t.write("proj/dbt_packages/p/seeds/y.csv", "In,Package\n");
         t.write("away/seeds/z.csv", "In,Root\n");
+        t.write("away/dbt_project.yml", "name: p\n");
         let mut z = seed_at("p", "z", "seeds/z.csv");
         z.1.root_path = t.0.join("away").to_string_lossy().into_owned();
         let got = headers_in(
@@ -3337,6 +3413,7 @@ mod tests {
         assert!(edges(&o).is_empty(), "as before: the seed's columns were not known");
 
         // Its root_path is the manifest's own word for where its seeds are.
+        t.write("origin/dbt_project.yml", "name: p\n");
         let with_root = artifact(&t, Some(&t.0.join("origin")));
         o.manifest = Some(with_root.clone());
         let from_origin = edges(&o);
