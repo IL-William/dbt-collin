@@ -16,7 +16,10 @@ USAGE
 
 OPTIONS
     --project DIR     dbt project root, where the manifest is looked for
-                      when none is named (default: .)
+                      when none is named (default: .). A seed's CSV is read
+                      from it for its columns, unless a manifest is named
+                      without it: that one is read alone, and its seeds are
+                      looked for only where it says they are (root_path)
     --manifest PATH   default: <project>/target/manifest.json. The four paths
                       below default beside it, where dbt writes them, so a
                       manifest copied out of its project is read alone.
@@ -69,6 +72,7 @@ fn main() -> ExitCode {
     }
 
     let mut project = PathBuf::from(".");
+    let mut project_named = false;
     let mut manifest = None;
     let mut catalog = None;
     let mut compiled = None;
@@ -87,6 +91,7 @@ fn main() -> ExitCode {
             "--project" => match need(i, "--project") {
                 Ok(v) => {
                     project = PathBuf::from(v);
+                    project_named = true;
                     2
                 }
                 Err(e) => return fail(&e),
@@ -151,6 +156,7 @@ fn main() -> ExitCode {
     }
 
     let mut opts = Options::new(project);
+    opts.project_named = project_named;
     opts.manifest = manifest;
     opts.catalog = catalog;
     opts.compiled = compiled;

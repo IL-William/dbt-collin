@@ -405,8 +405,8 @@ pub struct LostEnd {
 #[derive(Serialize, Debug, PartialEq)]
 pub struct LostRelation {
     pub relation: String,
-    /// `warehouse`, `computed`, `declared`, or `unknown` for a relation the
-    /// model does not depend on.
+    /// `warehouse`, `computed`, `declared`, `seed_file`, or `unknown` for a
+    /// relation the model does not depend on.
     pub columns_from: &'static str,
 }
 

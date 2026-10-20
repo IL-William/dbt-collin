@@ -41,6 +41,10 @@ pub struct RawNode {
     pub package_name: String,
     #[serde(default)]
     pub original_file_path: String,
+    /// The project's folder on the machine that parsed it. Only a seed's file is
+    /// ever looked for there, and only when it is not under the project given.
+    #[serde(default)]
+    pub root_path: Option<String>,
     #[serde(default)]
     pub relation_name: Option<String>,
     /// Absent until dbt compiles the node, and present, if empty, once it has:
@@ -99,6 +103,19 @@ pub struct RawDependsOn {
 pub struct RawConfig {
     #[serde(default)]
     pub materialized: Option<String>,
+    /// A seed's CSV delimiter, `,` when absent. Read from every node's config,
+    /// so anything but a string (a list, a number on a model) is taken as
+    /// absent rather than failing the whole manifest.
+    #[serde(default, deserialize_with = "string_or_none")]
+    pub delimiter: Option<String>,
+}
+
+fn string_or_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let value = <Option<serde_json::Value>>::deserialize(d)?;
+    Ok(match value {
+        Some(serde_json::Value::String(s)) => Some(s),
+        _ => None,
+    })
 }
 
 impl RawManifest {
@@ -125,6 +142,13 @@ pub struct Node {
     /// Column names as declared in YAML, lower case, in the YAML's order.
     pub declared: Vec<String>,
     pub parents: Vec<String>,
+    /// A seed's `root_path` and `delimiter` config, empty when the manifest has
+    /// none or for any other node.
+    pub root_path: String,
+    pub delimiter: String,
+    /// A seed's column names from its CSV header, lower case, in the file's
+    /// order. Empty until `read_seed_headers` finds a header it can trust (0047).
+    pub file_columns: Vec<String>,
 }
 
 /// Where a model's SQL came from (0033).
@@ -273,6 +297,9 @@ impl Project {
                     },
                     declared,
                     parents: parents_of(uid, &n.depends_on),
+                    root_path: n.root_path.clone().unwrap_or_default(),
+                    delimiter: n.config.delimiter.clone().unwrap_or_default(),
+                    file_columns: Vec::new(),
                 },
             );
         }
@@ -367,6 +394,27 @@ mod tests {
     }
 
     #[test]
+    fn a_delimiter_that_is_not_a_string_does_not_fail_the_manifest() {
+        // Every node's config is read, and a model may carry any value under
+        // that key: dbt reads it for a seed only.
+        let manifest = r#"{"nodes": {
+            "model.p.orders": {"name": "orders", "resource_type": "model", "package_name": "p",
+                "config": {"materialized": "table", "delimiter": ["|"]}},
+            "model.p.stores": {"name": "stores", "resource_type": "model", "package_name": "p",
+                "config": {"delimiter": 3}},
+            "model.p.items": {"name": "items", "resource_type": "model", "package_name": "p",
+                "config": {"delimiter": null}},
+            "seed.p.rates": {"name": "rates", "resource_type": "seed", "package_name": "p",
+                "config": {"delimiter": ";"}}}}"#;
+        let raw: RawManifest = serde_json::from_str(manifest).unwrap();
+        let p = Project::from_manifest(raw);
+        assert_eq!(p.nodes["seed.p.rates"].delimiter, ";");
+        for model in ["orders", "stores", "items"] {
+            assert_eq!(p.nodes[&format!("model.p.{model}")].delimiter, "", "{model}");
+        }
+    }
+
+    #[test]
     fn relation_names_normalise_to_one_shape() {
         assert_eq!(norm_relation("db.sch.tbl"), "DB.SCH.TBL");
         assert_eq!(norm_relation("\"DB\".\"sch\".\"Tbl\""), "DB.SCH.TBL");
@@ -397,6 +445,9 @@ mod tests {
                 sql_source: SqlSource::Manifest,
                 declared: Vec::new(),
                 parents: parents.iter().map(|s| s.to_string()).collect(),
+                root_path: String::new(),
+                delimiter: String::new(),
+                file_columns: Vec::new(),
             },
         )
     }
@@ -415,6 +466,7 @@ mod tests {
                     resource_type: "source".into(),
                     package_name: String::new(),
                     original_file_path: String::new(),
+                    root_path: None,
                     relation_name: Some("\"DB\".\"sch\".\"tbl\"".into()),
                     compiled_code: None,
                     language: None,

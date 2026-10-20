@@ -144,7 +144,7 @@ invariant.
 | --- | --- |
 | `manifest.rs` | the dbt manifest, the relation index, the topological order |
 | `catalog.rs` | `catalog.json`, the only witness to the warehouse |
-| `schema.rs` | the three column sources and the agreement verdicts |
+| `schema.rs` | the column sources (the YAML, the catalog, a compile, a seed's CSV header) and the agreement verdicts |
 | `engine.rs` | the analysis library, behind an interface that hides it |
 | `role.rs` | an expression to a role |
 | `lineage.rs` | the pass, and the provenance ladder |

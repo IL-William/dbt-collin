@@ -1,7 +1,8 @@
-//! The three sources of truth about a node's columns, kept apart on purpose.
+//! The sources of truth about a node's columns, kept apart on purpose.
 //!
 //! - **declared**: the YAML. What the project says it produces, i.e. intent.
 //! - **warehouse**: `catalog.json`. What the object actually has.
+//! - **file**: a seed's CSV header, which is what `dbt seed` loads (0047).
 //! - **computed**: what this compile's SQL would produce, filled as models resolve.
 //!
 //! Keeping them separate is what lets the report distinguish a stale YAML
@@ -19,6 +20,8 @@ use std::collections::{HashMap, HashSet};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Provenance {
     Warehouse,
+    /// A seed's CSV header, read where the catalog has no entry for it.
+    File,
     Computed,
     Declared,
     Unknown,
@@ -28,6 +31,7 @@ impl Provenance {
     pub fn as_str(self) -> &'static str {
         match self {
             Provenance::Warehouse => "warehouse",
+            Provenance::File => "seed_file",
             Provenance::Computed => "computed",
             Provenance::Declared => "declared",
             Provenance::Unknown => "unknown",
@@ -88,13 +92,19 @@ fn ordered<'s>(lists: &'s HashMap<String, Listed>, uid: &str) -> Option<&'s [Str
 pub struct Store {
     declared: HashMap<String, Listed>,
     warehouse: HashMap<String, Listed>,
+    file: HashMap<String, Listed>,
     computed: HashMap<String, Listed>,
 }
 
 impl Store {
     /// Each list in its source's order: the YAML's, the table's.
     pub fn new(declared: HashMap<String, Vec<String>>, warehouse: HashMap<String, Vec<String>>) -> Store {
-        Store { declared: listed(declared), warehouse: listed(warehouse), computed: HashMap::new() }
+        Store { declared: listed(declared), warehouse: listed(warehouse), file: HashMap::new(), computed: HashMap::new() }
+    }
+
+    /// `cols` in the order of the seed's CSV header.
+    pub fn set_file(&mut self, uid: &str, cols: Vec<String>) {
+        self.file.insert(uid.to_string(), Listed::new(cols));
     }
 
     /// `cols` in the order the compile projects them.
@@ -119,6 +129,9 @@ impl Store {
     pub fn warehouse(&self, uid: &str) -> Option<&Vec<String>> {
         self.warehouse.get(uid).map(|l| &l.sorted).filter(|v| !v.is_empty())
     }
+    pub fn file(&self, uid: &str) -> Option<&Vec<String>> {
+        self.file.get(uid).map(|l| &l.sorted).filter(|v| !v.is_empty())
+    }
     pub fn computed(&self, uid: &str) -> Option<&Vec<String>> {
         self.computed.get(uid).map(|l| &l.sorted).filter(|v| !v.is_empty())
     }
@@ -128,10 +141,14 @@ impl Store {
     ///
     /// The warehouse wins: downstream SQL was compiled against the objects that
     /// actually exist, so a `select *` there sees the warehouse columns, not
-    /// whatever this compile would have produced.
+    /// whatever this compile would have produced. A seed's header comes next:
+    /// the file is what `dbt seed` loads, and a seed has no compile (0047).
     pub fn visible(&self, uid: &str) -> (&[String], Provenance) {
         if let Some(c) = ordered(&self.warehouse, uid) {
             return (c, Provenance::Warehouse);
+        }
+        if let Some(c) = ordered(&self.file, uid) {
+            return (c, Provenance::File);
         }
         if let Some(c) = ordered(&self.computed, uid) {
             return (c, Provenance::Computed);
@@ -203,6 +220,19 @@ mod tests {
         let (c, p) = s.visible("m");
         assert_eq!(c, cols(&["a", "b"]).as_slice());
         assert_eq!(p, Provenance::Warehouse);
+    }
+
+    #[test]
+    fn a_seed_s_header_is_seen_before_its_yaml_and_after_the_warehouse() {
+        let mut s = Store::new(HashMap::from([("seed".into(), cols(&["old"]))]), HashMap::new());
+        assert_eq!(s.visible("seed"), (cols(&["old"]).as_slice(), Provenance::Declared));
+        s.set_file("seed", cols(&["z", "a"]));
+        assert_eq!(s.visible("seed"), (cols(&["z", "a"]).as_slice(), Provenance::File));
+        assert_eq!(s.file("seed").unwrap(), &cols(&["a", "z"]));
+        assert_eq!(Provenance::File.as_str(), "seed_file");
+        let mut s = Store::new(HashMap::new(), HashMap::from([("seed".into(), cols(&["w"]))]));
+        s.set_file("seed", cols(&["z", "a"]));
+        assert_eq!(s.visible("seed").1, Provenance::Warehouse, "the table dbt built wins (0004)");
     }
 
     #[test]
