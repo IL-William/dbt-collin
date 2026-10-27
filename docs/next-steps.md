@@ -189,3 +189,20 @@ of stars over tables that order their columns differently, read exactly since
   unaliased derived table, or a bare name several sources have, is read as
   before 0041, against the source the engine hung the window off: 3 of the 29
   window and ordered aggregate expressions here, none of them wrong.
+- **Link tests on Unix only**: CI runs on Ubuntu, so the `cfg(unix)` tests of
+  0048 run there and nothing exercises the Windows paths.
+- **Replacing an output on Windows** (a rename over an existing file or a link)
+  is never run in CI (0048).
+- **The check and the read are two steps**: a compiled file or a seed swapped
+  for a link in between is still read; it needs a writer in the project while
+  collin runs (0048).
+- **Outputs a rename cannot replace** are refused: `/dev/null`, `/dev/stdout`, a
+  file mounted alone, a folder collin cannot create in. There is no in-place
+  fallback: write to a regular path and copy it (0048).
+- **A package linked out of the project** to a folder holding a
+  `dbt_project.yml` is followed, so the first line of a CSV there can be read as
+  a seed's header (0048).
+- **An output replaced by a rename** takes a new file's mode, not the old one's
+  (0048).
+- **Temporaries left by a killed run** (`<file>.tmp-<pid>-<n>`) stay beside the
+  output until removed by hand; a later run skips their names (0048).
