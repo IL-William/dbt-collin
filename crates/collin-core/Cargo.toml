@@ -11,3 +11,9 @@ flowscope-core.workspace = true
 sqlparser.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+# The dump is a tool for reading why, but what it writes is named by the
+# manifest, so its guard is tested with the rest (0048).
+[[example]]
+name = "dump"
+test = true

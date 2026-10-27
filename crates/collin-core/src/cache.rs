@@ -78,12 +78,10 @@ impl Cache {
         Cache { version: VERSION, source: SOURCE.into(), producer: producer(), target, generated_at: now(), edges, roots }
     }
 
+    /// Replaces a link at `path` rather than writing through it (0048).
     pub fn write(&self, path: &std::path::Path) -> Result<(), String> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-        }
         let text = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+        crate::output::replace(path, &text)
     }
 }
 
@@ -151,5 +149,24 @@ mod tests {
         assert!(text.contains("\"version\":1"), "{text}");
         let producer = format!("\"producer\":\"collin {}\"", env!("CARGO_PKG_VERSION"));
         assert!(text.contains(&producer), "{text}");
+    }
+
+    /// A cache path that is a link planted in a project is replaced, not
+    /// written through (0048).
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_cache_path_is_replaced() {
+        let dir = std::env::temp_dir().join(format!("collin-cache-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, "mine").unwrap();
+        let path = dir.join("column_lineage.collin.json");
+        std::os::unix::fs::symlink(&victim, &path).unwrap();
+        Cache::new("dev".into(), Vec::new(), Vec::new()).write(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "mine");
+        assert!(!std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"source\":\"collin\""));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

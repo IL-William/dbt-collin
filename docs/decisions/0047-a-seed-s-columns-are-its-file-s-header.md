@@ -112,3 +112,8 @@ longer parents without columns.
 
 A project run without a catalog, as dbt-edith may run one, now has the edges
 from every seed whose file is found and whose header is trusted.
+
+## Amended by 0048
+
+The file is read only when it resolves, links followed, under the folder it was
+found from.

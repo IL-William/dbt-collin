@@ -53,6 +53,7 @@ is built this way, for whoever changes it next.
 | [0045](0045-a-root-goes-in-the-cache-with-its-value.md) | A root goes in the cache with its value | changing what `Resolved::roots` carries, adding a field to the cache, or drawing an edge into a column built from no column |
 | [0046](0046-a-manifest-named-alone-is-read-with-what-lies-beside-it.md) | A manifest named alone is read with what lies beside it | changing where a path `generate` reads or writes defaults to, or where a model's compiled file is looked for |
 | [0047](0047-a-seed-s-columns-are-its-file-s-header.md) | A seed's columns are its file's header | changing what is known of a seed's columns, how a CSV header is read, or which files `generate` reads from the project |
+| [0048](0048-a-file-the-manifest-names-is-read-inside-the-folder-it-came-from.md) | A file the manifest names is read inside the folder it came from | changing how a compiled file or a seed's CSV is opened, or how the cache and the report are written |
 
 ## The other side of the boundary
 
