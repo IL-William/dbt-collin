@@ -1573,7 +1573,7 @@ fn read_compiled_files(project: &mut Project, dir: &Path, held: &Path, label: &s
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => Err(e.to_string()),
             Ok(real) if !real.starts_with(&canon_dir) => {
-                Err("it is a link to a file outside the folder it is held to".to_string())
+                Err(format!("it is a link to a file outside {}, the folder it is held to", held.display()))
             }
             Ok(real) => match std::fs::metadata(&real) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -1619,6 +1619,8 @@ const HEADER_FIRST_READ: usize = 8192;
 /// no header (0048).
 fn read_seed_headers(project: &mut Project, dir: Option<&Path>, warehouse: &HashMap<String, Vec<String>>) {
     let root = project.project_name.clone();
+    // Once, not per seed: the folder the project's own files must lie under.
+    let project_real = dir.and_then(|d| d.canonicalize().ok());
     for node in project.nodes.values_mut().filter(|n| n.kind == "seed") {
         if warehouse.get(&node.uid).is_some_and(|c| !c.is_empty()) {
             continue;
@@ -1659,7 +1661,7 @@ fn read_seed_headers(project: &mut Project, dir: Option<&Path>, warehouse: &Hash
                 break;
             }
             if package {
-                let inside = dir.and_then(|d| d.canonicalize().ok()).is_some_and(|d| base.starts_with(d));
+                let inside = project_real.as_ref().is_some_and(|d| base.starts_with(d));
                 if !inside && !base.join("dbt_project.yml").is_file() {
                     break;
                 }
@@ -2211,7 +2213,7 @@ mod tests {
         let leak = &p.nodes["model.shop.leak"];
         assert_eq!(leak.sql, "");
         let why = leak.no_sql().unwrap();
-        assert!(why.contains("outside the folder"), "{why}");
+        assert!(why.contains(&format!("outside {}, the folder it is held to", target.display())), "{why}");
         assert_eq!(p.nodes["model.shop.alias"].sql, "select 'kept'");
     }
 
@@ -2251,8 +2253,38 @@ mod tests {
         };
         let held = read(&t.0.join("target"));
         assert_eq!(held.sql, "");
-        assert!(held.no_sql().unwrap().contains("outside the folder"));
+        let why = held.no_sql().unwrap();
+        assert!(why.contains(&format!("outside {}, the folder it is held to", t.0.join("target").display())), "{why}");
         assert_eq!(read(&t.0.join("target/compiled")).sql, "select 'canary'", "named with --compiled");
+    }
+
+    /// Through `load`, the folder a default `compiled/` is held to is the
+    /// manifest's, not the `compiled` that was found: a `compiled` linked
+    /// elsewhere reads nothing unless `--compiled` names it.
+    #[cfg(unix)]
+    #[test]
+    fn load_holds_a_linked_compiled_folder_to_the_target() {
+        let t = Target::new("load-compiled-link");
+        let manifest = serde_json::json!({
+            "metadata": {"dbt_version": "1.11.8", "project_name": "shop", "adapter_type": "snowflake"},
+            "nodes": {"model.shop.m": {
+                "name": "m", "resource_type": "model", "relation_name": "db.sales.m",
+                "package_name": "shop", "original_file_path": "models/m.sql",
+                "config": {"materialized": "table"}}},
+            "parent_map": {"model.shop.m": []}
+        });
+        t.write("target/manifest.json", manifest.to_string());
+        t.write("elsewhere/shop/models/m.sql", "select 'canary'");
+        std::os::unix::fs::symlink(t.0.join("elsewhere"), t.0.join("target/compiled")).unwrap();
+        let mut o = Options::new(t.0.clone());
+        let loaded = load(&o).unwrap();
+        let m = &loaded.project.nodes["model.shop.m"];
+        assert!(matches!(m.sql_source, SqlSource::Unusable(_)), "{:?}", m.sql_source);
+        assert_eq!(m.sql, "");
+        // Named with --compiled, the same folder is the user's own choice.
+        o.compiled = Some(t.0.join("target/compiled"));
+        let loaded = load(&o).unwrap();
+        assert_eq!(loaded.project.nodes["model.shop.m"].sql, "select 'canary'");
     }
 
     #[test]

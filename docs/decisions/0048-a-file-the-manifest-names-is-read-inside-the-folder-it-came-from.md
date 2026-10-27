@@ -34,9 +34,9 @@ it names.
   tested for being a regular file and read, so the check and the read name one
   path.
 - **A refusal is worded like its neighbours.** A compiled file that resolves
-  elsewhere is `SqlSource::Unusable` ("it is a link to a file outside the
-  folder it is held to"); a seed's is a file with no header, and the next
-  candidate is not tried, as for a candidate that is not a file.
+  elsewhere is `SqlSource::Unusable` ("it is a link to a file outside
+  <folder>, the folder it is held to"); a seed's is a file with no header, and
+  the next candidate is not tried, as for a candidate that is not a file.
 - **Only what is below the folder is held.** A target directory the user links
   elsewhere, or a project folder reached through a link, still works: the
   folder is resolved first. dbt-edith's `files::resolve` has the same rule.
@@ -78,3 +78,9 @@ the next run, and the file it named keeps its old content. The new file has
 the mode a new file gets, not the old one's. The check and the read are not
 one atomic step: a link swapped in between is still read, which needs a
 writer in the project while collin runs.
+
+An output is now written by creating a file beside it and renaming that over
+it, so a path where collin can write the file but not create one beside it (a
+folder it may not create in, a device such as `/dev/null` or `/dev/stdout`, a
+single file bind-mounted alone) is refused where it used to be written in
+place. Write to a regular path and copy it.

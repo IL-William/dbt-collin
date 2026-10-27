@@ -117,5 +117,5 @@ the catalog when present, and that directory (amends 0001).
 
 ## Amended by 0048
 
-The file is read only when it resolves, links followed, under the folder it was
-found from.
+The file is read only when it resolves, links followed, under the folder
+holding the manifest (`target/`), or under the folder `--compiled` names.

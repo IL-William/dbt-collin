@@ -12,6 +12,33 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// How many temporary names are tried before giving up.
+const TRIES: u64 = 64;
+
+/// Creates a new file beside `path`, named `<file>.tmp-<pid>-<n>` from `start`
+/// on. A name that is taken is skipped, never removed or written through: it
+/// may be a temporary left by a killed run (the counter starts at 0 again, and
+/// the pid is the same in a container), or a link planted there, which is what
+/// `create_new` refuses.
+fn create_beside(path: &Path, start: u64) -> Result<(std::path::PathBuf, std::fs::File), String> {
+    let mut last = String::new();
+    for n in start..start + TRIES {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".tmp-{}-{n}", std::process::id()));
+        let tmp = path.with_file_name(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            Err(e) => {
+                last = format!("cannot write {}: cannot create {}: {e}", path.display(), tmp.display());
+                if e.kind() != std::io::ErrorKind::AlreadyExists {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last)
+}
+
 /// Writes `text` to `path`, replacing whatever is there, a link included.
 /// Creates the folders above it.
 pub fn replace(path: &Path, text: &str) -> Result<(), String> {
@@ -20,17 +47,7 @@ pub fn replace(path: &Path, text: &str) -> Result<(), String> {
     }
     // Named per write, so two writes of one path at once do not share a file.
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".tmp-{}-{n}", std::process::id()));
-    let tmp = path.with_file_name(name);
-    // A failure to open leaves the name alone: it may be a file this call did
-    // not create, which is the very case `create_new` refuses.
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    let (tmp, mut file) = create_beside(path, NEXT.fetch_add(TRIES, Ordering::Relaxed))?;
     let written = file.write_all(text.as_bytes());
     // Closed before the rename: Windows will not move an open file.
     drop(file);
@@ -81,21 +98,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Planted at the temporary name, a file is refused and left alone.
+    /// Planted at the temporary names, a file or a link is skipped and left
+    /// alone, and the write still lands.
     #[test]
-    fn a_file_at_the_temporary_name_is_not_removed() {
+    fn a_name_that_is_taken_is_skipped_not_removed() {
         let d = dir("planted");
         let path = d.join("out.json");
-        // The names are `out.json.tmp-<pid>-<n>`: plant every name the counter can reach in a test run.
-        for n in 0..4096 {
-            std::fs::write(d.join(format!("out.json.tmp-{}-{n}", std::process::id())), "theirs").unwrap();
+        let name = |n: u64| d.join(format!("out.json.tmp-{}-{n}", std::process::id()));
+        std::fs::write(name(0), "theirs").unwrap();
+        std::fs::write(name(1), "theirs").unwrap();
+        let victim = d.join("victim.txt");
+        std::fs::write(&victim, "mine").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, name(2)).unwrap();
+        #[cfg(not(unix))]
+        std::fs::write(name(2), "theirs").unwrap();
+        let (tmp, file) = create_beside(&path, 0).unwrap();
+        assert_eq!(tmp, name(3), "the first three are taken");
+        drop(file);
+        std::fs::remove_file(&tmp).unwrap();
+        assert_eq!(std::fs::read_to_string(name(0)).unwrap(), "theirs");
+        assert_eq!(std::fs::read_to_string(name(1)).unwrap(), "theirs");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "mine");
+        #[cfg(unix)]
+        assert!(std::fs::symlink_metadata(name(2)).unwrap().file_type().is_symlink());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Every name in the range taken: refused, naming the temporary path.
+    #[test]
+    fn the_last_name_taken_is_named_in_the_refusal() {
+        let d = dir("exhausted");
+        let path = d.join("out.json");
+        let name = |n: u64| d.join(format!("out.json.tmp-{}-{n}", std::process::id()));
+        for n in 0..TRIES {
+            std::fs::write(name(n), "theirs").unwrap();
         }
-        assert!(replace(&path, "{}").is_err());
-        let kept = std::fs::read_dir(&d).unwrap().filter(|e| {
-            let p = e.as_ref().unwrap().path();
-            p.to_string_lossy().contains(".tmp-") && std::fs::read_to_string(p).unwrap() == "theirs"
-        });
-        assert_eq!(kept.count(), 4096);
+        let err = create_beside(&path, 0).unwrap_err();
+        assert!(err.contains(&name(TRIES - 1).display().to_string()), "{err}");
+        assert!(err.starts_with(&format!("cannot write {}", path.display())), "{err}");
+        assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 
