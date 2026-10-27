@@ -109,6 +109,10 @@ fn dump() -> Result<(usize, PathBuf), String> {
         }
         let m = seen.model;
         let file = if names[m.name.as_str()] > 1 { &m.uid } else { &m.name };
+        if let Err(e) = safe_file_name(file) {
+            failed = Some(e);
+            return;
+        }
         let path = out.join(format!("{file}.json"));
         let text = serde_json::to_string_pretty(&describe(seen));
         let wrote = text.map_err(|e| e.to_string()).and_then(|t| {
@@ -123,6 +127,17 @@ fn dump() -> Result<(usize, PathBuf), String> {
         Some(e) => Err(e),
         None => Ok((written, out)),
     }
+}
+
+/// A model's name comes from the manifest, which a project can carry from
+/// elsewhere: one with a separator in it would write above `--out`. The
+/// `.json` after it makes a bare `..` harmless, so only a separator is refused,
+/// and a colon: `C:x` leaves `--out` on Windows, and `a:b` names a stream.
+fn safe_file_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains(['/', '\\', ':']) {
+        return Err(format!("{name:?} is not a file name: the manifest names a model with a path separator or a colon in it"));
+    }
+    Ok(())
 }
 
 fn describe(seen: &Seen) -> Value {
@@ -230,4 +245,18 @@ fn describe(seen: &Seen) -> Value {
         "published_indirect": seen.published_indirect,
         "published_roots": seen.published_roots,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_file_name;
+
+    #[test]
+    fn a_name_with_a_separator_is_refused() {
+        assert!(safe_file_name("orders").is_ok());
+        assert!(safe_file_name("orders.v2").is_ok());
+        for bad in ["../x", "a/b", "a\\b", "/etc/x", "C:x", "a:b", ""] {
+            assert!(safe_file_name(bad).is_err(), "{bad}");
+        }
+    }
 }

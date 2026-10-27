@@ -151,5 +151,6 @@ invariant.
 | `report.rs` | coverage and gaps |
 | `findings.rs` | the report's models grouped by cause, worded for whoever can act |
 | `cache.rs` | the `column_lineage.json` writer |
+| `output.rs` | writing a file without following a link at its path (0048) |
 
 Tests live beside the code in `#[cfg(test)]` modules, the way dbt-lens does it.

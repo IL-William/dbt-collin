@@ -15,6 +15,7 @@ pub mod engine;
 pub mod findings;
 pub mod lineage;
 pub mod manifest;
+pub mod output;
 pub mod report;
 pub mod role;
 pub mod schema;

@@ -257,7 +257,8 @@ pub fn load(opts: &Options) -> Result<Loaded, String> {
             ));
         }
     }
-    read_compiled_files(&mut project, &compiled, &opts.compiled_label());
+    let held = if opts.compiled.is_some() { compiled.clone() } else { opts.target_dir() };
+    read_compiled_files(&mut project, &compiled, &held, &opts.compiled_label());
 
     let catalog_path = opts.catalog_path();
     let witness = if catalog_path.exists() {
@@ -1545,10 +1546,16 @@ fn wanted_folders(project: &Project) -> Vec<String> {
 /// read: its compiled file is Python.
 ///
 /// `dir` is the folder dbt compiled into, and `label` how the report names it,
-/// before the file's path in that folder.
-fn read_compiled_files(project: &mut Project, dir: &Path, label: &str) {
+/// before the file's path in that folder. `held` is the folder a file must
+/// really lie in once links are followed (0048): the manifest's own folder
+/// unless `--compiled` names the folder, so a `compiled` committed as a link
+/// elsewhere reads nothing.
+fn read_compiled_files(project: &mut Project, dir: &Path, held: &Path, label: &str) {
     let fusion = fusion(&project.dbt_version);
     let root = project.project_name.clone();
+    // A folder that is not there makes every file below it not there either.
+    let held = if held.as_os_str().is_empty() { Path::new(".") } else { held };
+    let canon_dir = held.canonicalize().unwrap_or_else(|_| held.to_path_buf());
     for node in project.nodes.values_mut() {
         if !node.is_model() || !node.is_sql() || node.sql_source != SqlSource::Missing || node.file.is_empty() {
             continue;
@@ -1557,13 +1564,23 @@ fn read_compiled_files(project: &mut Project, dir: &Path, label: &str) {
             node.sql_source = SqlSource::Unusable("the manifest gives it no path inside the folder dbt compiles into".into());
             continue;
         };
-        let path = dir.join(&rel);
+        // The manifest names the file, so where it really is is checked: a
+        // link in the folder may point anywhere, and what it reaches would go
+        // into the cache and the report (0048). The folder held may itself be
+        // a link the user made, hence the comparison on resolved paths.
         // Only a file: a FIFO would hang the run, and a device never ends.
-        let read = match std::fs::metadata(&path) {
+        let read = match dir.join(&rel).canonicalize() {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => Err(e.to_string()),
-            Ok(meta) if !meta.is_file() => Err("not a file".to_string()),
-            Ok(_) => std::fs::read_to_string(&path).map_err(|e| e.to_string()),
+            Ok(real) if !real.starts_with(&canon_dir) => {
+                Err("it is a link to a file outside the folder it is held to".to_string())
+            }
+            Ok(real) => match std::fs::metadata(&real) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => Err(e.to_string()),
+                Ok(meta) if !meta.is_file() => Err("not a file".to_string()),
+                Ok(_) => std::fs::read_to_string(&real).map_err(|e| e.to_string()),
+            },
         };
         node.sql_source = match read {
             Ok(sql) if sql.trim().is_empty() => SqlSource::Unusable("its compiled file is empty".into()),
@@ -1597,7 +1614,9 @@ const HEADER_FIRST_READ: usize = 8192;
 /// anyone's. A Fusion manifest's `root_path` names a folder on another machine
 /// and is only tried last, and only when it is an absolute path to a dbt
 /// project (it holds a `dbt_project.yml`): a manifest is not trusted to point
-/// collin at any folder.
+/// collin at any folder. The file read is the one the path really leads to,
+/// and it lies under the folder its candidate was built from, or the seed has
+/// no header (0048).
 fn read_seed_headers(project: &mut Project, dir: Option<&Path>, warehouse: &HashMap<String, Vec<String>>) {
     let root = project.project_name.clone();
     for node in project.nodes.values_mut().filter(|n| n.kind == "seed") {
@@ -1611,29 +1630,46 @@ fn read_seed_headers(project: &mut Project, dir: Option<&Path>, warehouse: &Hash
             [one] => *one,
             _ => continue,
         };
-        let mut candidates: Vec<PathBuf> = Vec::new();
+        // Each candidate with the folder it was built from, which the file
+        // must really lie in once links are followed (0048).
+        let mut candidates: Vec<(PathBuf, PathBuf, bool)> = Vec::new();
         if let Some(dir) = dir {
             // Without the project's name no seed is known for the root's.
             if !root.is_empty() && node.package == root {
-                candidates.push(dir.join(&rel));
+                candidates.push((dir.join(&rel), dir.to_path_buf(), false));
             } else {
-                candidates.push(dir.join("dbt_packages").join(&node.package).join(&rel));
+                // The package's own folder, not the project's: `dbt deps` makes
+                // a local package a link to a folder elsewhere. One that
+                // leads out of the project must be a dbt project, as for
+                // `root_path`.
+                let package = dir.join("dbt_packages").join(&node.package);
+                candidates.push((package.join(&rel), package, true));
             }
         }
         let root_path = Path::new(&node.root_path);
         if root_path.is_absolute() && root_path.join("dbt_project.yml").is_file() {
-            candidates.push(root_path.join(&rel));
+            candidates.push((root_path.join(&rel), root_path.to_path_buf(), false));
         }
-        for path in candidates {
+        for (path, base, package) in candidates {
             // Only a file: a FIFO would hang the run, and a device never ends.
             // An error of any kind is a file that is not there, as for dbt's
             // `os.path.exists` (a parent that is not a folder, no permission).
-            match std::fs::metadata(&path) {
+            let (Ok(base), Ok(real)) = (base.canonicalize(), path.canonicalize()) else { continue };
+            if !real.starts_with(&base) {
+                break;
+            }
+            if package {
+                let inside = dir.and_then(|d| d.canonicalize().ok()).is_some_and(|d| base.starts_with(d));
+                if !inside && !base.join("dbt_project.yml").is_file() {
+                    break;
+                }
+            }
+            match std::fs::metadata(&real) {
                 Err(_) => continue,
                 Ok(meta) if meta.is_file() => {}
                 _ => break,
             }
-            node.file_columns = read_header(&path, delimiter).unwrap_or_default();
+            node.file_columns = read_header(&real, delimiter).unwrap_or_default();
             break;
         }
     }
@@ -2060,7 +2096,7 @@ mod tests {
         let mut p = project_of(nodes);
         p.project_name = "shop".into();
         p.dbt_version = version.into();
-        read_compiled_files(&mut p, &target.0.join("compiled"), "compiled");
+        read_compiled_files(&mut p, &target.0.join("compiled"), &target.0, "compiled");
         p
     }
 
@@ -2153,6 +2189,70 @@ mod tests {
             let why = "no compiled_code, and the manifest gives it no path inside the folder dbt compiles into";
             assert_eq!(n.no_sql().as_deref(), Some(why), "{name}");
         }
+    }
+
+    /// A link in a project can name any file; what the manifest asks for is
+    /// read only where it really lies (0048).
+    #[cfg(unix)]
+    #[test]
+    fn a_compiled_file_that_is_a_link_out_of_the_target_is_not_read() {
+        use std::os::unix::fs::symlink;
+        let t = Target::new("compiled-link");
+        t.write("outside/secret.sql", "select 'canary'");
+        t.write("target/compiled/shop/models/inside.sql", "select 'kept'");
+        symlink(t.0.join("outside/secret.sql"), t.0.join("target/compiled/shop/models/leak.sql")).unwrap();
+        // A link that stays inside the folder is the user's own business.
+        symlink(t.0.join("target/compiled/shop/models/inside.sql"), t.0.join("target/compiled/shop/models/alias.sql")).unwrap();
+        let mut p = project_of(vec![at("leak", "models/leak.sql", None), at("alias", "models/alias.sql", None)]);
+        p.project_name = "shop".into();
+        p.dbt_version = "1.11.8".into();
+        let target = t.0.join("target");
+        read_compiled_files(&mut p, &target.join("compiled"), &target, "compiled");
+        let leak = &p.nodes["model.shop.leak"];
+        assert_eq!(leak.sql, "");
+        let why = leak.no_sql().unwrap();
+        assert!(why.contains("outside the folder"), "{why}");
+        assert_eq!(p.nodes["model.shop.alias"].sql, "select 'kept'");
+    }
+
+    /// Only the part below the folder is held: a target directory the user
+    /// links elsewhere still works.
+    #[cfg(unix)]
+    #[test]
+    fn a_target_that_is_itself_a_link_is_still_read() {
+        let t = Target::new("compiled-target-link");
+        t.write("real/target/compiled/shop/models/m.sql", "select 1");
+        std::fs::create_dir_all(t.0.join("proj")).unwrap();
+        std::os::unix::fs::symlink(t.0.join("real/target"), t.0.join("proj/target")).unwrap();
+        let target = t.0.join("proj/target");
+        let mut p = project_of(vec![at("m", "models/m.sql", None)]);
+        p.project_name = "shop".into();
+        p.dbt_version = "1.11.8".into();
+        read_compiled_files(&mut p, &target.join("compiled"), &target, "compiled");
+        assert_eq!(p.nodes["model.shop.m"].sql, "select 1");
+    }
+
+    /// `compiled` committed as a link beside the real manifest is below the
+    /// target directory, so it is held; named with `--compiled` it is the
+    /// user's own choice and is read.
+    #[cfg(unix)]
+    #[test]
+    fn a_compiled_folder_that_is_a_link_out_of_the_target_is_not_read() {
+        let t = Target::new("compiled-folder-link");
+        t.write("elsewhere/shop/models/m.sql", "select 'canary'");
+        t.write("target/manifest.json", "{}");
+        std::os::unix::fs::symlink(t.0.join("elsewhere"), t.0.join("target/compiled")).unwrap();
+        let read = |held: &Path| {
+            let mut p = project_of(vec![at("m", "models/m.sql", None)]);
+            p.project_name = "shop".into();
+            p.dbt_version = "1.11.8".into();
+            read_compiled_files(&mut p, &t.0.join("target/compiled"), held, "compiled");
+            p.nodes.remove("model.shop.m").unwrap()
+        };
+        let held = read(&t.0.join("target"));
+        assert_eq!(held.sql, "");
+        assert!(held.no_sql().unwrap().contains("outside the folder"));
+        assert_eq!(read(&t.0.join("target/compiled")).sql, "select 'canary'", "named with --compiled");
     }
 
     #[test]
@@ -3145,6 +3245,7 @@ mod tests {
     fn seed_at(package: &str, name: &str, file: &str) -> (String, Node) {
         let mut n = node(&format!("seed.{package}.{name}"), &format!("db.seeds.{name}"), &[], &[]);
         n.1.kind = "seed".into();
+        n.1.package = package.into();
         n.1.file = file.into();
         n
     }
@@ -3231,6 +3332,66 @@ mod tests {
         for none in ["dup", "blank", "gone", "up", "text", "abs", "drive"] {
             assert!(got[none].is_empty(), "{none}");
         }
+    }
+
+    /// A link in a project can name any file; a seed's header is read only
+    /// from where the path really leads inside the folder it was built from
+    /// (0048).
+    #[cfg(unix)]
+    #[test]
+    fn a_seed_that_is_a_link_out_of_its_folder_has_no_header() {
+        use std::os::unix::fs::symlink;
+        let t = Target::new("seed-links");
+        t.write("outside/secret.csv", "Canary,Value\n");
+        t.write("proj/seeds/real.csv", "Code,Label\n");
+        t.write("proj/dbt_packages/util/seeds/units.csv", "Unit,Factor\n");
+        t.write("local_pkg/seeds/local.csv", "Own,Seed\n");
+        t.write("local_pkg/dbt_project.yml", "name: local\n");
+        symlink(t.0.join("outside/secret.csv"), t.0.join("proj/seeds/leak.csv")).unwrap();
+        symlink(t.0.join("proj/seeds/real.csv"), t.0.join("proj/seeds/alias.csv")).unwrap();
+        // A folder linked out, as a `seeds/` the user did not write.
+        symlink(t.0.join("outside"), t.0.join("proj/seeds/dir")).unwrap();
+        // The package's link out of dbt_packages, as `dbt deps` makes for a
+        // local package, is the package's folder.
+        symlink(t.0.join("local_pkg"), t.0.join("proj/dbt_packages/local")).unwrap();
+        // A link out of an installed package's folder.
+        symlink(t.0.join("outside/secret.csv"), t.0.join("proj/dbt_packages/util/seeds/leak.csv")).unwrap();
+        let got = headers_in(
+            Some(&t.0.join("proj")),
+            "p",
+            vec![
+                seed_at("p", "leak", "seeds/leak.csv"),
+                seed_at("p", "alias", "seeds/alias.csv"),
+                seed_at("p", "dir", "seeds/dir/secret.csv"),
+                seed_at("local", "local", "seeds/local.csv"),
+                seed_at("util", "pkgleak", "seeds/leak.csv"),
+            ],
+        );
+        let got: HashMap<&str, &[String]> = got.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
+        assert_eq!(got["alias"], cols(&["code", "label"]).as_slice(), "a link that stays inside");
+        assert_eq!(got["local"], cols(&["own", "seed"]).as_slice(), "a local package's link");
+        for none in ["leak", "dir", "pkgleak"] {
+            assert!(got[none].is_empty(), "{none}");
+        }
+    }
+
+    /// `dbt_packages/<package>` committed as a link out of the project is
+    /// followed only when what it leads to is a dbt project, as `root_path` is.
+    #[cfg(unix)]
+    #[test]
+    fn a_package_that_is_a_link_to_a_folder_that_is_no_project_has_no_header() {
+        use std::os::unix::fs::symlink;
+        let t = Target::new("seed-package-link");
+        t.write("elsewhere/seeds/passwd.csv", "Canary,Value\n");
+        t.write("proj/seeds/x.csv", "A,B\n");
+        std::fs::create_dir_all(t.0.join("proj/dbt_packages")).unwrap();
+        symlink(t.0.join("elsewhere"), t.0.join("proj/dbt_packages/trap")).unwrap();
+        let got = headers_in(Some(&t.0.join("proj")), "p", vec![seed_at("trap", "passwd", "seeds/passwd.csv")]);
+        assert!(got[0].1.is_empty());
+        // The same folder with a project in it is a local package.
+        t.write("elsewhere/dbt_project.yml", "name: trap\n");
+        let got = headers_in(Some(&t.0.join("proj")), "p", vec![seed_at("trap", "passwd", "seeds/passwd.csv")]);
+        assert_eq!(got[0].1, cols(&["canary", "value"]));
     }
 
     #[test]

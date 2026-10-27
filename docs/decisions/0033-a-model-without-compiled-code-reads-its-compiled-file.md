@@ -114,3 +114,8 @@ A pinned copy now holds `target/compiled/` beside its manifest, and its
 fingerprint has to cover it (amends 0007): one manifest and one catalog with
 different compiled files give different caches. The inputs are the manifest,
 the catalog when present, and that directory (amends 0001).
+
+## Amended by 0048
+
+The file is read only when it resolves, links followed, under the folder it was
+found from.
