@@ -415,6 +415,15 @@ fn star_sources(query: &Query) -> Vec<String> {
 struct Predicate {
     sources: Vec<(String, Option<String>)>,
     names: Vec<(Option<String>, String)>,
+    /// What the `FROM` of its `SELECT` calls its factors, `select_sources`
+    /// skips included, so that a qualifier it defines is not looked for outward.
+    shadow: Shadow,
+    /// The sources of the `SELECT`s this one is a subquery in, nearest first,
+    /// for a qualified name its own `FROM` does not define (0049). Empty for a
+    /// statement's own `SELECT`, a CTE body or a derived table in `FROM`, which
+    /// are given none; a `LATERAL` derived table can correlate, and is a limit
+    /// left as it is: its outer names stay unread.
+    outer: Vec<Scope>,
 }
 
 /// The subqueries a predicate holds at its own level, `x in (select a ...)`,
@@ -460,6 +469,32 @@ impl<'a> PredicateSubqueries<'a> {
     }
 }
 
+/// The queries an expression holds at its own level, by address: a scalar
+/// subquery, `exists (...)` or `in (select ...)` anywhere in it, a function
+/// argument or a `CASE` included, none inside another query.
+#[derive(Default)]
+struct ExprSubqueries {
+    depth: usize,
+    found: Vec<usize>,
+}
+
+impl Visitor for ExprSubqueries {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<()> {
+        if self.depth == 0 {
+            self.found.push(query as *const Query as usize);
+        }
+        self.depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _: &Query) -> ControlFlow<()> {
+        self.depth -= 1;
+        ControlFlow::Continue(())
+    }
+}
+
 /// The keys of one `JOIN`, with what its `SELECT` reads.
 struct JoinKeys {
     sources: Vec<(String, Option<String>)>,
@@ -490,6 +525,100 @@ fn select_sources(select: &sqlparser::ast::Select) -> Vec<(String, Option<String
         }
     }
     sources
+}
+
+/// A `SELECT` an inner query may correlate with: what its names bind to, and
+/// what its `FROM` calls everything else.
+#[derive(Clone)]
+struct Scope {
+    sources: Vec<(String, Option<String>)>,
+    shadow: Shadow,
+}
+
+/// What the `FROM` of a `SELECT` calls its factors, all of them: unlike
+/// `select_sources`, which lists only what can be read, this counts the ones it
+/// skips (`lateral flatten(...) as t`, `table(...)`, a parenthesised join, a
+/// pivot), since a qualifier any of them defines is the `SELECT`'s own and must
+/// not be looked for outward.
+#[derive(Default, Clone)]
+struct Shadow {
+    names: Vec<String>,
+    /// A factor with no name to be told by, or one this does not know: any
+    /// qualifier may be its.
+    any: bool,
+}
+
+impl Shadow {
+    fn of(select: &sqlparser::ast::Select) -> Shadow {
+        let mut shadow = Shadow::default();
+        for from in &select.from {
+            shadow.with_joins(from);
+        }
+        // `lateral view explode(...) e as value` defines `e` for the SELECT.
+        for view in &select.lateral_views {
+            shadow.last_part(&view.lateral_view_name);
+        }
+        shadow
+    }
+
+    /// The last part of a name, unquoted and lower case, which is how
+    /// `names_in` gives a qualifier; a part that is no identifier is a name
+    /// this cannot tell, so any qualifier may be it.
+    fn last_part(&mut self, name: &sqlparser::ast::ObjectName) {
+        match name.0.last().and_then(|part| part.as_ident()) {
+            Some(ident) => self.names.push(ident.value.to_lowercase()),
+            None => self.any = true,
+        }
+    }
+
+    fn hides(&self, qualifier: &str) -> bool {
+        self.any || self.names.iter().any(|n| n == qualifier)
+    }
+
+    fn with_joins(&mut self, from: &sqlparser::ast::TableWithJoins) {
+        self.factor(&from.relation);
+        for join in &from.joins {
+            self.factor(&join.relation);
+        }
+    }
+
+    fn factor(&mut self, factor: &TableFactor) {
+        use TableFactor as F;
+        let alias = match factor {
+            F::Table { name, alias, .. } => {
+                match alias {
+                    Some(a) => self.names.push(a.name.value.to_lowercase()),
+                    None => self.last_part(name),
+                }
+                return;
+            }
+            F::NestedJoin { table_with_joins, alias } => {
+                self.with_joins(table_with_joins);
+                alias
+            }
+            F::Pivot { table, alias, .. } | F::Unpivot { table, alias, .. } | F::MatchRecognize { table, alias, .. } => {
+                self.factor(table);
+                alias
+            }
+            F::Derived { alias, .. }
+            | F::TableFunction { alias, .. }
+            | F::Function { alias, .. }
+            | F::UNNEST { alias, .. }
+            | F::JsonTable { alias, .. }
+            | F::OpenJsonTable { alias, .. }
+            | F::XmlTable { alias, .. } => alias,
+            _ => {
+                self.any = true;
+                return;
+            }
+        };
+        match alias {
+            Some(a) => self.names.push(a.name.value.to_lowercase()),
+            // Pivot and a nested join pass their inner names through.
+            None if matches!(factor, F::NestedJoin { .. } | F::Pivot { .. } | F::Unpivot { .. } | F::MatchRecognize { .. }) => {}
+            None => self.any = true,
+        }
+    }
 }
 
 /// A `QUALIFY`, with what its own `SELECT` reads and the names it reads.
@@ -550,15 +679,42 @@ struct Qualifies {
     qualifies: Vec<Qualify>,
     joins: Vec<JoinKeys>,
     predicates: Vec<Predicate>,
+    /// For a query that is a subquery in an expression of a `SELECT`, by
+    /// address, the sources it may correlate with. The AST is borrowed for the
+    /// whole walk, so an address names one query, and an outer query is
+    /// visited before the ones it holds, which is when it fills this in.
+    enclosing: HashMap<usize, Vec<Scope>>,
 }
 
 impl Qualifies {
-    fn body(&mut self, expr: &SetExpr) {
+    fn body(&mut self, expr: &SetExpr, outer: &[Scope]) {
         match expr {
             SetExpr::Select(select) => {
                 let sources = select_sources(select);
+                // A subquery in the select list, the `WHERE` or the `HAVING`
+                // sees this `SELECT`'s sources, then those it sees itself. A
+                // CTE or a derived table in `FROM` is not one: it gets none.
+                let shadow = Shadow::of(select);
+                let mut chain = vec![Scope { sources: sources.clone(), shadow: shadow.clone() }];
+                chain.extend(outer.iter().cloned());
+                let projected = select.projection.iter().filter_map(|item| match item {
+                    SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => Some(e),
+                    _ => None,
+                });
+                for e in projected.chain(select.selection.iter()).chain(select.having.iter()) {
+                    let mut found = ExprSubqueries::default();
+                    let _ = e.visit(&mut found);
+                    for address in found.found {
+                        self.enclosing.insert(address, chain.clone());
+                    }
+                }
                 for predicate in select.selection.iter().chain(select.having.iter()) {
-                    self.predicates.push(Predicate { sources: sources.clone(), names: names_in(predicate) });
+                    self.predicates.push(Predicate {
+                        sources: sources.clone(),
+                        names: names_in(predicate),
+                        shadow: shadow.clone(),
+                        outer: outer.to_vec(),
+                    });
                     for sub in PredicateSubqueries::collect(predicate) {
                         if let SetExpr::Select(inner) = sub.body.as_ref() {
                             let names = inner
@@ -569,7 +725,12 @@ impl Qualifies {
                                     _ => Vec::new(),
                                 })
                                 .collect();
-                            self.predicates.push(Predicate { sources: select_sources(inner), names });
+                            self.predicates.push(Predicate {
+                                sources: select_sources(inner),
+                                names,
+                                shadow: Shadow::of(inner),
+                                outer: chain.clone(),
+                            });
                         }
                     }
                 }
@@ -618,8 +779,13 @@ impl Qualifies {
                 self.qualifies.push(Qualify { sources, names });
             }
             SetExpr::SetOperation { left, right, .. } => {
-                self.body(left);
-                self.body(right);
+                self.body(left, outer);
+                self.body(right, outer);
+            }
+            // A parenthesised branch is a query of its own that the walk
+            // visits later; it sees what the branch around it sees.
+            SetExpr::Query(query) => {
+                self.enclosing.insert(&**query as *const Query as usize, outer.to_vec());
             }
             _ => {}
         }
@@ -631,7 +797,9 @@ impl Visitor for Qualifies {
 
     // A nested query is visited on its own, so only this body is read here.
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<()> {
-        self.body(&query.body);
+        // Each address is visited once, so the chain is taken, not copied.
+        let outer = self.enclosing.remove(&(query as *const Query as usize)).unwrap_or_default();
+        self.body(&query.body, &outer);
         ControlFlow::Continue(())
     }
 }
@@ -2414,17 +2582,47 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     // predicate to a table it reads directly, and those stand; one over a
     // CTE's columns it leaves on the CTE, and a subquery inside the predicate
     // it reads as if it were a column of the output.
+    //
+    // A qualified name its own sources do not define belongs to the nearest
+    // enclosing `SELECT` that defines its qualifier, when this one is a
+    // subquery in an expression: the correlation of `r.book_id = b.book_id`
+    // is a read of `b` (0049). A bare name is never looked for outward.
+    let binds_in = |sources: &[(String, Option<String>)], qn: &str| {
+        sources.iter().any(|(source, alias)| {
+            alias.as_deref() == Some(qn) || (alias.is_none() && source.rsplit('.').next() == Some(qn))
+        })
+    };
     for p in &predicates {
         for (qualifier, name) in &p.names {
-            let binds = qualifier.as_ref().is_none_or(|qn| {
-                p.sources.iter().any(|(source, alias)| {
-                    alias.as_ref() == Some(qn) || (alias.is_none() && source.rsplit('.').next() == Some(qn.as_str()))
-                })
-            });
-            match place(&p.sources, qualifier, name) {
+            let scope = match qualifier {
+                Some(qn) if !binds_in(&p.sources, qn) => {
+                    if p.shadow.hides(qn) {
+                        continue;
+                    }
+                    // Each scope on the way out is looked at in turn: the first
+                    // whose sources have the qualifier is where it binds, and
+                    // the first whose FROM defines it some way the sources do
+                    // not list is where it stops, unread.
+                    let mut found = None;
+                    for scope in &p.outer {
+                        if binds_in(&scope.sources, qn) {
+                            found = Some(&scope.sources);
+                            break;
+                        }
+                        if scope.shadow.hides(qn) {
+                            break;
+                        }
+                    }
+                    match found {
+                        Some(s) => s,
+                        None => continue,
+                    }
+                }
+                _ => &p.sources,
+            };
+            match place(scope, qualifier, name) {
                 Some(pairs) => record(pairs, crate::role::Role::Filter, &mut out),
-                None if binds => out.unplaced_filter += 1,
-                None => {}
+                None => out.unplaced_filter += 1,
             }
         }
     }
@@ -3996,6 +4194,145 @@ mod tests {
             vec![("DB.SCH.MARK", "ts"), ("DB.SCH.ORDERS", "ts")]
         );
         assert_eq!(r.outputs, vec!["id"], "the subquery is no output column");
+    }
+
+    fn shelf_tables() -> Vec<Visible> {
+        vec![
+            vis("LAB.SHELF.BOOKS", &["book_id", "title"]),
+            vis("LAB.RAW.REVIEWS", &["book_id", "stars"]),
+        ]
+    }
+
+    #[test]
+    fn a_correlated_scalar_subquery_reads_the_outer_name_as_a_filter() {
+        // `b` is defined by the enclosing SELECT, so the correlation is a read
+        // of BOOKS (0049); the subquery's own name is a read of REVIEWS.
+        let r = resolve(
+            "select b.book_id, (select max(r.stars) from LAB.RAW.REVIEWS as r where r.book_id = b.book_id) \
+             as best_stars from LAB.SHELF.BOOKS as b",
+            "snowflake",
+            &shelf_tables(),
+        );
+        assert_eq!(
+            reads_of(&r, crate::role::Role::Filter),
+            vec![("LAB.RAW.REVIEWS", "book_id"), ("LAB.SHELF.BOOKS", "book_id")]
+        );
+        assert_eq!(r.unplaced_filter, 0);
+    }
+
+    #[test]
+    fn a_correlated_exists_in_a_where_reads_the_outer_name_as_a_filter() {
+        let r = resolve(
+            "select b.title from LAB.SHELF.BOOKS as b \
+             where exists (select 1 from LAB.RAW.REVIEWS as r where r.book_id = b.book_id and r.stars > 3)",
+            "snowflake",
+            &shelf_tables(),
+        );
+        assert_eq!(
+            reads_of(&r, crate::role::Role::Filter),
+            vec![
+                ("LAB.RAW.REVIEWS", "book_id"),
+                ("LAB.RAW.REVIEWS", "stars"),
+                ("LAB.SHELF.BOOKS", "book_id")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_is_looked_for_outward_only_from_a_subquery_in_an_expression() {
+        // A guard rather than the change: the old code passes it too. A CTE
+        // body is given no enclosing scope: `b` is the outer SELECT's alias,
+        // and the body names nothing called `b` in its own FROM, so the name
+        // stays unread rather than bound to a scope that is not its own.
+        let r = resolve(
+            "with c as (select r.book_id from LAB.RAW.REVIEWS as r where b.book_id = r.book_id) \
+             select b.title from LAB.SHELF.BOOKS as b join c on c.book_id = b.book_id",
+            "snowflake",
+            &shelf_tables(),
+        );
+        let filters = reads_of(&r, crate::role::Role::Filter);
+        assert!(!filters.contains(&("LAB.SHELF.BOOKS", "book_id")), "{filters:?}");
+        assert!(filters.contains(&("LAB.RAW.REVIEWS", "book_id")), "{filters:?}");
+    }
+
+    fn event_tables() -> Vec<Visible> {
+        vec![
+            vis("LAB.SHELF.BOOKS", &["book_id", "tags"]),
+            vis("LAB.RAW.REVIEWS", &["book_id", "stars"]),
+            vis("LAB.RAW.EVENTS", &["id", "book_id", "value"]),
+        ]
+    }
+
+    #[test]
+    fn a_qualifier_a_flatten_defines_is_not_looked_for_outward() {
+        // `select_sources` does not list `lateral flatten(...) as t`, but the
+        // subquery's FROM defines `t`: the outer `t` is another table's, and
+        // reading `events.value` here would be a wrong filter.
+        let r = resolve(
+            "select t.id, (select count(*) from LAB.SHELF.BOOKS as b, lateral flatten(input => b.tags) as t \
+             where t.value = 'x') as n from LAB.RAW.EVENTS as t",
+            "snowflake",
+            &event_tables(),
+        );
+        let filters = reads_of(&r, crate::role::Role::Filter);
+        assert!(!filters.contains(&("LAB.RAW.EVENTS", "value")), "{filters:?}");
+    }
+
+    #[test]
+    fn a_qualifier_an_enclosing_flatten_defines_stops_the_search_there() {
+        // `t` in the innermost query is the scalar subquery's FLATTEN, which
+        // `select_sources` does not list; the search must stop at that scope
+        // rather than bind `t` to the outermost SELECT's `events`.
+        let r = resolve(
+            "select t.id, (select count(*) from LAB.SHELF.BOOKS as b, lateral flatten(input => b.tags) as t \
+             where exists (select 1 from LAB.RAW.REVIEWS as r where r.stars = t.value)) as n \
+             from LAB.RAW.EVENTS as t",
+            "snowflake",
+            &event_tables(),
+        );
+        let filters = reads_of(&r, crate::role::Role::Filter);
+        assert!(!filters.contains(&("LAB.RAW.EVENTS", "value")), "{filters:?}");
+    }
+
+    #[test]
+    fn a_quoted_table_defines_its_name_unquoted() {
+        // `names_in` gives the qualifier unquoted, so the inner table must
+        // shadow it unquoted too: `reviews` is the subquery's own table.
+        for adapter in ["snowflake", "duckdb"] {
+            let r = resolve(
+                "select reviews.id, (select count(*) from \"LAB\".\"RAW\".\"REVIEWS\" \
+                 where reviews.book_id = 1) as n from LAB.RAW.EVENTS as reviews",
+                adapter,
+                &event_tables(),
+            );
+            let filters = reads_of(&r, crate::role::Role::Filter);
+            assert!(!filters.contains(&("LAB.RAW.EVENTS", "book_id")), "{adapter}: {filters:?}");
+        }
+    }
+
+    #[test]
+    fn a_lateral_view_defines_its_name_for_its_select() {
+        // Databricks: `e` is the lateral view's, not the outer `events` alias.
+        let r = resolve(
+            "select e.id, (select count(*) from LAB.RAW.REVIEWS as r lateral view explode(r.tags) e as value \
+             where e.value = 1) as n from LAB.RAW.EVENTS as e",
+            "databricks",
+            &event_tables(),
+        );
+        let filters = reads_of(&r, crate::role::Role::Filter);
+        assert!(!filters.contains(&("LAB.RAW.EVENTS", "value")), "{filters:?}");
+    }
+
+    #[test]
+    fn a_qualifier_a_parenthesised_join_defines_is_not_looked_for_outward() {
+        let r = resolve(
+            "select r.id, (select max(r.stars) from (LAB.RAW.REVIEWS as r inner join LAB.SHELF.BOOKS as b \
+             on r.book_id = b.book_id) where r.book_id = 1) as best from LAB.RAW.EVENTS as r",
+            "snowflake",
+            &event_tables(),
+        );
+        let filters = reads_of(&r, crate::role::Role::Filter);
+        assert!(!filters.contains(&("LAB.RAW.EVENTS", "book_id")), "{filters:?}");
     }
 
     #[test]

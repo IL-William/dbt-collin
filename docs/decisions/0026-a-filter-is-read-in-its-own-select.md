@@ -41,3 +41,12 @@ have is counted and read by nobody; a qualifier binding no source of the
 On the same project the default cache is identical. Filters in the report go
 from 1631 to 1984, 353 new in 149 models and none lost; no name was ambiguous.
 Under `--indirect` the cache grows from 281 571 edges to 298 340.
+
+## Amended on 2026-10-30
+
+A qualifier binding no source of the `SELECT` is no longer left unread when the
+`SELECT` is a subquery in an expression: it is read in the nearest enclosing
+`SELECT` that defines it, which is how a correlated subquery's read of its
+outer query now reaches the cache
+([0049](0049-a-correlated-name-is-read-where-its-qualifier-is-defined.md)). A
+bare name, a CTE body and a derived table are read as above.
