@@ -13,27 +13,23 @@ done, so that whoever picks it up needs nothing but this tree.
 1. **A `PIVOT`'s value columns**, a patch to the engine's fork (0028).
    lineage-library marks it; no model of the Snowflake project uses one,
    eight of Cal-ITP do.
-2. **Five Snowflake shapes read wrong**, which lineage-library marks: patches
-   to the engine's fork (0028), or to what `engine.rs` hands it, one per
-   shape. Four give lineage that is wrong, not only missing, and go first: a
-   scalar subquery in a select list, correlated, has the outer side of its
-   correlation for its value, and uncorrelated, is lost; `TABLE(FLATTEN(...))`
-   gives its value as a root; so does a star inside a call,
-   `OBJECT_CONSTRUCT(*)` or `HASH(*)`; a lambda's argument is read as a column
-   of the table. The fifth loses lineage: a table left without an alias, its
-   columns qualified with its own name, has none of those it selects
-   resolved, and the model is read by name; whether the engine or what
-   `engine.rs` hands it drops them is not known yet. Each is done when its
-   marks are gone and the caches of Jaffle Shop and Shopify move only where its
-   shape stands. Until then nothing holds back the root that
-   `TABLE(FLATTEN(...))` or a star inside a call gives: under `Plan::Parsed`,
-   `publish` sends every root the engine gives, even when it reports
-   `UNSUPPORTED_SYNTAX`, as it does for `TABLE(FLATTEN(...))`; a star inside a
-   call raises no issue at all (`plan` reads none of the engine's issues but a
-   parse error). A guard would want a decision record, and a measure of what it
-   takes away, first.
-3. **Upstreaming the fork's eleven patches** to pondpilot/flowscope, so that the
-   pin can go back to a crates.io release (0028). The owner's decision:
+2. **Three Snowflake shapes read wrong**, which lineage-library marks: patches
+   to the engine's fork (0028), one per shape. Each gives lineage that is wrong,
+   not only missing: `TABLE(FLATTEN(...))` gives its value as a root; so does a
+   star inside a call, `OBJECT_CONSTRUCT(*)` or `HASH(*)`; a lambda's argument
+   is read as a column of the table. Two more are read since 0049 and the
+   engine's twelfth and thirteenth patches: a scalar subquery in a select list,
+   and a table left without an alias whose columns are qualified with its own
+   name. Each is done when its marks are gone and the caches of Jaffle Shop and
+   Shopify move only where its shape stands. Until then nothing holds back the
+   root that `TABLE(FLATTEN(...))` or a star inside a call gives: under
+   `Plan::Parsed`, `publish` sends every root the engine gives, even when it
+   reports `UNSUPPORTED_SYNTAX`, as it does for `TABLE(FLATTEN(...))`; a star
+   inside a call raises no issue at all (`plan` reads none of the engine's
+   issues but a parse error). A guard would want a decision record, and a
+   measure of what it takes away, first.
+3. **Upstreaming the fork's thirteen patches** to pondpilot/flowscope, so that
+   the pin can go back to a crates.io release (0028). The owner's decision:
    nothing is proposed upstream without it.
 4. **More shapes in lineage-library**: a recursive CTE, a `UNION BY NAME`, a
    `MERGE`; and from Snowflake, `SPLIT_TO_TABLE`, `CONNECT BY` with `LEVEL`,
@@ -192,12 +188,12 @@ against the warehouse or the YAML, 4466. sqlglot reads all 5548 of its edges
 the same way.
 
 **lineage-library** (0042), the lineage of an invented project written by hand:
-the pass gives 191 of its 221 facts. Of the other 30, six are a `PIVOT`'s value
-columns and 24 are missed in the Snowflake shapes of item 2, which also give
-six lines that are wrong: a value edge from the wrong column, three roots and
-two lambda edges. collin marks each as a known limit. Its shapes include a
-`UNION ALL` of stars over tables that order their columns differently, read
-exactly since 0044, and `dbt_utils.union_relations` as it compiles.
+the pass gives 203 of its 221 facts. Of the other 18, six are a `PIVOT`'s value
+columns and twelve are missed in the Snowflake shapes of item 2, which also give
+five lines that are wrong: three roots and two lambda edges. collin marks each
+as a known limit. Its shapes include a `UNION ALL` of stars over tables that
+order their columns differently, read exactly since 0044, and
+`dbt_utils.union_relations` as it compiles.
 
 ## Residuals already named
 

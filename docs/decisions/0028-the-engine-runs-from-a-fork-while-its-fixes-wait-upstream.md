@@ -55,6 +55,13 @@ The patches, in the order they are pinned:
    the first branch's names.
 10. A wildcard's REPLACE puts the replacing expression in the column's place,
     and its ILIKE keeps the columns whose name the pattern matches.
+11. A name in a select list that a source of the `FROM` is known to have is
+    that column, even where an earlier item gives an alias of that name.
+12. A scalar subquery in a select list is analysed against a node of its own,
+    and its column feeds the item that reads it.
+13. A table without an alias is known in its scope by its bare name, so a
+    subquery's table shadows an outer alias of that name and a column
+    qualified with the bare name is read; a `LATERAL VIEW`'s name shadows too.
 
 When upstream releases a patch, the fork rebases onto that release and drops
 it. When it has released them all, the pin goes back to a crates.io version and
@@ -158,3 +165,17 @@ loses 12 parsed edges and gains 6, in 7 models, each read in the SQL and each
 now the column; under `--indirect` the same 7 models lose 37 and gain 35, as
 pairs that lost their value fall back to the key that still reads them.
 lineage-library's two marks for it go.
+
+Moved to the thirteenth, tagged `collin-engine-8`, past the twelfth,
+`collin-engine-7`, which was never pinned. The twelfth reads a scalar subquery
+in a select list: it was never analysed, so its column was drawn from the
+`FROM` table with the subquery's text, and `engine.rs` read the outer side of
+a correlation out of that text as the value. With it alone, two tests of 0049
+failed: the engine now placed a subquery's filter, and an unaliased table in
+the subquery did not shadow an outer alias of its name, so the filter went to
+the outer table. The thirteenth gives an unaliased table its bare name in its
+scope, and with it a column qualified with that name is read too, where it
+fell to a name without its schema. `book_ratings`, `loan_titles` and
+`shelf_tags` give their lineage as written. Jaffle Shop and Shopify do not
+move, cache and totals, `--indirect` included; lineage-library's nineteen
+marks for the two go.

@@ -2749,7 +2749,9 @@ mod tests {
             // Nothing but the child says the column exists.
             model("model.p.documented", &raw, &["id"], "select from"),
             model("model.p.documented_kid", &["model.p.documented"], &[], "select d.id, d.amount from db.sch.documented as d"),
-            // The engine's own false alarm: a CTE named like the alias inside it.
+            // A CTE named like the alias inside it, where the engine raised a
+            // false alarm until its thirteenth patch: whatever it says, the
+            // parent is not the one to answer for it.
             model("model.p.named", &raw, &[], "select id, amount as diff from db.raw.feed"),
             model(
                 "model.p.named_kid",
@@ -2758,6 +2760,11 @@ mod tests {
                 "with named as (select named.id, max(named.diff) as last_diff from db.sch.named as named group by 1) \
                  select named.id, named.last_diff from named",
             ),
+            // The child reads a column the parent lacks only to filter: no
+            // edge comes from it, so nothing backs the read and it stays on
+            // the child.
+            model("model.p.quiet", &raw, &[], "select id from db.raw.feed"),
+            model("model.p.quiet_kid", &["model.p.quiet"], &[], "select q.id from db.sch.quiet as q where q.amount > 0"),
         ]);
         let warehouse = HashMap::from([
             ("source.p.raw.feed".to_string(), cols(&["amount", "id"])),
@@ -2782,7 +2789,9 @@ mod tests {
         assert_eq!(reads("model.p.documented"), vec![("amount", "declared", false, vec!["model.p.documented_kid"])]);
         assert!(entry("model.p.documented_kid").is_some(), "nothing but the child says it exists");
         assert!(reads("model.p.named").is_empty());
-        assert!(entry("model.p.named_kid").is_some(), "no edge was drawn from the column named");
+        assert!(entry("model.p.named_kid").is_none(), "the CTE is read by its name, no alarm left");
+        assert!(reads("model.p.quiet").is_empty());
+        assert!(entry("model.p.quiet_kid").is_some(), "no edge was drawn from the column it filters on");
         assert_eq!(r.report.totals.read_downstream_but_absent, 3);
     }
 
