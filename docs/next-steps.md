@@ -2,8 +2,8 @@
 
 Where the lineage stands, and what would raise it. Measured on 2026-10-11 with
 collin 0.6.0, the engine at the fork's `collin-engine-4`, on a pinned copy of a
-3507 model Snowflake project, its manifest and its catalog generated on one
-target with that target's environment. Not a decision: a list to come back to.
+Snowflake project, its manifest and its catalog generated on one target with
+that target's environment. Not a decision: a list to come back to.
 
 ## What to do next
 
@@ -22,14 +22,24 @@ done, so that whoever picks it up needs nothing but this tree.
    `OBJECT_CONSTRUCT(*)` or `HASH(*)`; a lambda's argument is read as a column
    of the table. The fifth loses lineage: a table left without an alias, its
    columns qualified with its own name, has none of those it selects
-   resolved, and the model is read by name. Each is done when its marks are
-   gone and the caches of Jaffle Shop and Shopify move only where its shape
-   stands.
+   resolved, and the model is read by name; whether the engine or what
+   `engine.rs` hands it drops them is not known yet. Each is done when its
+   marks are gone and the caches of Jaffle Shop and Shopify move only where its
+   shape stands. Until then nothing holds back the root that
+   `TABLE(FLATTEN(...))` or a star inside a call gives: under `Plan::Parsed`,
+   `publish` sends every root the engine gives, even when it reports
+   `UNSUPPORTED_SYNTAX`, as it does for `TABLE(FLATTEN(...))`; a star inside a
+   call raises no issue at all (`plan` reads none of the engine's issues but a
+   parse error). A guard would want a decision record, and a measure of what it
+   takes away, first.
 3. **Upstreaming the fork's eleven patches** to pondpilot/flowscope, so that the
    pin can go back to a crates.io release (0028). The owner's decision:
    nothing is proposed upstream without it.
 4. **More shapes in lineage-library**: a recursive CTE, a `UNION BY NAME`, a
-   `MERGE`. Each is written from the SQL before collin is run on it.
+   `MERGE`; and from Snowflake, `SPLIT_TO_TABLE`, `CONNECT BY` with `LEVEL`,
+   an `UNPIVOT`, a positional `$1`, a `MATCH_RECOGNIZE` (the engine gives it no
+   edge and raises no issue), and `MINUS`, the other spelling of item 6's
+   `EXCEPT`. Each is written from the SQL before collin is run on it.
 5. **A third witness, optionally**: Snowflake's `ACCESS_HISTORY`, read outside
    collin, which never reaches a warehouse (0001).
 6. **The right side of an `EXCEPT` read as rows, not values.** The engine walks
