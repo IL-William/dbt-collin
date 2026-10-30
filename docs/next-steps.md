@@ -13,15 +13,26 @@ done, so that whoever picks it up needs nothing but this tree.
 1. **A `PIVOT`'s value columns**, a patch to the engine's fork (0028).
    lineage-library marks it; no model of the Snowflake project uses one,
    eight of Cal-ITP do.
-2. **Upstreaming the fork's eleven patches** to pondpilot/flowscope, so that the
+2. **Five Snowflake shapes read wrong**, which lineage-library marks: patches
+   to the engine's fork (0028), or to what `engine.rs` hands it, one per
+   shape. Four give lineage that is wrong, not only missing, and go first: a
+   scalar subquery in a select list, correlated, has the outer side of its
+   correlation for its value, and uncorrelated, is lost; `TABLE(FLATTEN(...))`
+   gives its value as a root; so does a star inside a call,
+   `OBJECT_CONSTRUCT(*)` or `HASH(*)`; a lambda's argument is read as a column
+   of the table. The fifth loses lineage: a table left without an alias, its
+   columns qualified with its own name, has none of those it selects
+   resolved, and the model is read by name. Each is done when its marks are
+   gone and the caches of Jaffle Shop and Shopify move only where its shape
+   stands.
+3. **Upstreaming the fork's eleven patches** to pondpilot/flowscope, so that the
    pin can go back to a crates.io release (0028). The owner's decision:
    nothing is proposed upstream without it.
-3. **More shapes in lineage-library**: a recursive CTE, a `UNION BY NAME`, a
-   scalar subquery in a select list, a `MERGE`. Each is written from the SQL
-   before collin is run on it.
-4. **A third witness, optionally**: Snowflake's `ACCESS_HISTORY`, read outside
+4. **More shapes in lineage-library**: a recursive CTE, a `UNION BY NAME`, a
+   `MERGE`. Each is written from the SQL before collin is run on it.
+5. **A third witness, optionally**: Snowflake's `ACCESS_HISTORY`, read outside
    collin, which never reaches a warehouse (0001).
-5. **The right side of an `EXCEPT` read as rows, not values.** The engine walks
+6. **The right side of an `EXCEPT` read as rows, not values.** The engine walks
    both sides of a set operation (`branches` in `engine.rs` says so), so a
    column on the right of an `EXCEPT`, which only takes rows away, reaches the
    output column by a value edge. It should be an indirect edge under
@@ -30,13 +41,13 @@ done, so that whoever picks it up needs nothing but this tree.
    of an `INTERSECT` is the same is part of the question. It starts with the
    shape in lineage-library, then the mark; done when the shape passes and
    the caches of Jaffle Shop and Shopify move only where an `EXCEPT` stands.
-6. **A union's literal beside a copied column.** A column that one branch of a
+7. **A union's literal beside a copied column.** A column that one branch of a
    union sets to a literal and another copies from a table has an edge, so it
    is no root and its literal is in no list (0045, Consequences): the value
    that branch gives is lost. The cache would carry the literal beside the
    edge, and stay at version 1 doing so (AGENTS.md). Done when such a union,
    written as a lineage-library shape, has its literal in the cache.
-7. **On hold: BigQuery**, not a priority for now. Its gaps are the engine's
+8. **On hold: BigQuery**, not a priority for now. Its gaps are the engine's
    STRUCT fields, `UNNEST` and `PIVOT` (On public projects, below).
 
 The precision, coverage and audit figures below were measured with the
@@ -171,10 +182,12 @@ against the warehouse or the YAML, 4466. sqlglot reads all 5548 of its edges
 the same way.
 
 **lineage-library** (0042), the lineage of an invented project written by hand:
-the pass gives 182 of its 188 facts. The other six are a `PIVOT`'s value
-columns, which collin marks as a known limit. Its shapes include a `UNION ALL`
-of stars over tables that order their columns differently, read exactly since
-0044, and `dbt_utils.union_relations` as it compiles.
+the pass gives 191 of its 221 facts. Of the other 30, six are a `PIVOT`'s value
+columns and 24 are missed in the Snowflake shapes of item 2, which also give
+six lines that are wrong: a value edge from the wrong column, three roots and
+two lambda edges. collin marks each as a known limit. Its shapes include a
+`UNION ALL` of stars over tables that order their columns differently, read
+exactly since 0044, and `dbt_utils.union_relations` as it compiles.
 
 ## Residuals already named
 

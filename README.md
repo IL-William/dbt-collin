@@ -264,6 +264,12 @@ in its table's order, the catalog's `index` or the parent's projection, since a
   best effort, and the warehouse then contradicts the compile. lineage-library
   carries this limit as marked lines
   ([0042](docs/decisions/0042-an-invented-project-carries-its-lineage-by-hand.md)).
+- **Five Snowflake shapes are read wrong**, and lineage-library marks them: a
+  scalar subquery in a select list, `TABLE(FLATTEN(...))`, a star inside a call
+  such as `OBJECT_CONSTRUCT(*)`, a lambda's argument, and a table without an
+  alias whose columns are qualified with its name. The first four can give an
+  edge from the wrong column or a column built from columns as a root; the
+  fifth is read by name ([next steps](docs/next-steps.md), item 2).
 - **The corpus never enters this repository.** Fixtures are invented, apart
   from two public projects, dbt's Jaffle Shop and Fivetran's Shopify package
   ([0038](docs/decisions/0038-a-public-example-project-is-a-fixture.md)); point

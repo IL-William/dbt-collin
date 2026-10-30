@@ -16,3 +16,61 @@ library: missing: member_branch_loans.south_loans <- loans_enriched.branch_code 
 library: missing: member_branch_loans.east_loans <- loans_enriched.loan_id aggregate
 library: missing: member_branch_loans.east_loans <- loans_enriched.branch_code aggregate
 library: extra: member_branch_loans plan PerColumn
+
+# A scalar subquery in a select list. Correlated, the engine gives the outer
+# side of the correlation as the column's value, and neither the column the
+# subquery aggregates nor that outer side as a read; uncorrelated, the column
+# is lost.
+library: missing: book_ratings.best_stars <- raw.reviews.stars aggregate
+library: missing: book_ratings reads books.book_id filter
+library: extra: book_ratings.best_stars <- books.book_id aggregate
+library: missing: book_ratings.last_review_at <- raw.reviews.written_at aggregate
+library: extra: book_ratings.last_review_at lost
+
+# A table left without an alias, its columns qualified with its own name: the
+# engine resolves none of those it selects, so the compile says nothing and is
+# set aside. The model is read by name: a column that is no copy of its
+# parent's, or a FLATTEN's value, gets nothing, and its reads are set aside
+# with the compile.
+library: missing: loan_titles.loan_id <- loans_enriched.loan_id passthrough
+library: missing: loan_titles.borrowed_at <- loans_enriched.borrowed_at passthrough
+library: missing: loan_titles.title <- books.title passthrough
+library: missing: loan_titles.genre <- books.genre_code transform
+library: missing: loan_titles reads loans_enriched.book_id join_key
+library: missing: loan_titles reads books.book_id join_key
+library: missing: loan_titles reads books.published_on filter
+library: extra: loan_titles plan Inferred
+library: extra: loan_titles.loan_id <- loans_enriched.loan_id inferred
+library: extra: loan_titles.borrowed_at <- loans_enriched.borrowed_at inferred
+library: extra: loan_titles.title <- books.title inferred
+library: missing: shelf_tags.book_id <- books.book_id passthrough
+library: missing: shelf_tags.tag <- books.tags transform
+library: extra: shelf_tags plan Inferred
+library: extra: shelf_tags.book_id <- books.book_id inferred
+
+# A FLATTEN called as TABLE(FLATTEN(...)) is not read as the LATERAL one: its
+# value is given as built from no column, and its index is lost.
+library: missing: tag_rows.tag <- books.tags transform
+library: extra: tag_rows.tag root
+library: missing: tag_rows.tag_position root
+library: extra: tag_rows.tag_position lost
+
+# A star inside a call, OBJECT_CONSTRUCT(*) or HASH(*), is read as no column:
+# the column it computes is given as a root.
+library: missing: review_documents.review_doc <- raw.reviews.review_id transform
+library: missing: review_documents.review_doc <- raw.reviews.book_id transform
+library: missing: review_documents.review_doc <- raw.reviews.member_id transform
+library: missing: review_documents.review_doc <- raw.reviews.stars transform
+library: missing: review_documents.review_doc <- raw.reviews.written_at transform
+library: extra: review_documents.review_doc root
+library: missing: review_documents.review_hash <- raw.reviews.review_id hash
+library: missing: review_documents.review_hash <- raw.reviews.book_id hash
+library: missing: review_documents.review_hash <- raw.reviews.member_id hash
+library: missing: review_documents.review_hash <- raw.reviews.stars hash
+library: missing: review_documents.review_hash <- raw.reviews.written_at hash
+library: extra: review_documents.review_hash root
+
+# A lambda's argument is read as a column of the table: the one of its name
+# when the table has it, and one the table does not have otherwise.
+library: extra: tag_spellings.tag_titles <- books.title transform
+library: extra: tag_spellings.tags_beyond_genre <- books.tag transform

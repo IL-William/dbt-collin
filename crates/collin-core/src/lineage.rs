@@ -4440,6 +4440,12 @@ mod tests {
             for root in seen.published_roots {
                 got.push(format!("{model}.{} root", root.column));
             }
+            // A compile set aside publishes no read and reports no lost column,
+            // as `publish` and the report decide, so the engine's reads and
+            // lost columns of it are not given.
+            if seen.plan == Plan::Inferred {
+                return;
+            }
             for lost in &seen.resolved.lost {
                 got.push(format!("{model}.{} lost", lost.column));
             }
