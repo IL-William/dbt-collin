@@ -18,11 +18,9 @@ library: missing: member_branch_loans.east_loans <- loans_enriched.branch_code a
 library: extra: member_branch_loans plan PerColumn
 
 # A scalar subquery in a select list. Correlated, the engine gives the outer
-# side of the correlation as the column's value, and neither the column the
-# subquery aggregates nor that outer side as a read; uncorrelated, the column
-# is lost.
+# side of the correlation as the column's value, not the column the subquery
+# aggregates; uncorrelated, the column is lost.
 library: missing: book_ratings.best_stars <- raw.reviews.stars aggregate
-library: missing: book_ratings reads books.book_id filter
 library: extra: book_ratings.best_stars <- books.book_id aggregate
 library: missing: book_ratings.last_review_at <- raw.reviews.written_at aggregate
 library: extra: book_ratings.last_review_at lost
