@@ -197,6 +197,25 @@ order their columns differently, read exactly since 0044, and
 
 ## Residuals already named
 
+- **A quoted outer alias in a subquery** is folded before the engine's
+  bare-name lookup (its thirteenth patch): on Snowflake, under
+  `FROM t AS "Reviews"`, a subquery reading `reviews` that filters on
+  `"Reviews".kind` puts the filter on its own table. An ordinary alias is
+  matched only as written, so DuckDB's `UNNEST(...) AS U`, read as a table,
+  does not hide an outer `u`.
+- **A CTE and a table read by one name**: `WITH reviews AS (...) SELECT
+  reviews.stars FROM db.raw.reviews` reads the CTE's column, since the engine
+  looks the qualifier up before the table it resolved.
+- **A column named `schema.table.column`** is read from `schema.table`, a
+  relation that does not exist, as collin gives the engine no default
+  database; `db.schema.table.column` is read right.
+- **A correlated name left unread** (0049): the outer names of a `LATERAL`
+  derived table, and a correlated name written without its qualifier, are not
+  bound outward.
+- **Edges in a run-dependent order under `hide_ctes`**: the engine gives a
+  statement's edges in a different order from one run to the next when it
+  hides CTEs (its `transform.rs` collects them from a hash map). collin never
+  sets it, so its caches do not move.
 - **An inferred column several parents could give** is settled by the compile,
   by every candidate, or by manifest order (0027). None here: one edge is
   inferred.
