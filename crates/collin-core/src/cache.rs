@@ -11,6 +11,10 @@
 //! A column the SQL builds from no column is no edge, having no parent. It goes
 //! in `roots` with the value the SQL sets it to, so that a reader tracing a
 //! column back can tell `current_timestamp()` from a source's own column (0045).
+//!
+//! `rules` and `expressions` are the two other lists beside the edges, for what
+//! an edge cannot say: which predicates decide a model's rows, and what computes
+//! a column (0050).
 
 use serde::Serialize;
 
@@ -47,6 +51,14 @@ pub struct Cache {
     /// that does not know the field skips it, as it does `producer`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub roots: Vec<Root>,
+    /// The predicates that decide which rows a model keeps, only under
+    /// `--indirect` as the indirect edges are. Left out when empty, like `roots`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<Rule>,
+    /// What computes the columns an edge calls a cast, a transform, an aggregate
+    /// or a window. Left out when empty, like `roots`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub expressions: Vec<Expression>,
 }
 
 #[derive(Serialize)]
@@ -73,9 +85,68 @@ pub struct Root {
     pub expressions: Vec<String>,
 }
 
+/// A predicate a model applies, as the compiled SQL writes it.
+#[derive(Serialize)]
+pub struct Rule {
+    /// The model's unique_id.
+    pub node: String,
+    /// `WHERE`, `HAVING`, `QUALIFY` or `JOIN`.
+    pub clause: String,
+    /// The predicate with the names it was written with, a CTE's alias included.
+    pub text: String,
+    /// The relations' columns those names resolve to, as the indirect reads
+    /// place them. A name that cannot be placed is not here.
+    pub columns: Vec<RuleColumn>,
+}
+
+#[derive(Serialize)]
+pub struct RuleColumn {
+    /// A dbt unique_id, or `rel:<db.schema.object>`, as an edge's `from`.
+    pub node: String,
+    pub column: String,
+}
+
+/// The expression behind one output column of a model.
+#[derive(Serialize)]
+pub struct Expression {
+    /// The model's unique_id.
+    pub node: String,
+    pub column: String,
+    /// The role of the loudest direct edge into the column: cast, transform,
+    /// aggregate or window.
+    pub kind: String,
+    /// The loudest expression met on the way back from the column, cut at 500
+    /// characters.
+    pub text: String,
+    /// How many expressions the walk met on the longest path to a relation, a
+    /// copy or a rename counting for none. Stops at 32: a column that reaches
+    /// 32 comes through a recursive CTE, which meets its expression once more
+    /// on every lap, and the count is then no path's length.
+    pub steps: u32,
+    /// Present only when `text` was cut.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+}
+
 impl Cache {
-    pub fn new(target: String, edges: Vec<Edge>, roots: Vec<Root>) -> Cache {
-        Cache { version: VERSION, source: SOURCE.into(), producer: producer(), target, generated_at: now(), edges, roots }
+    pub fn new(
+        target: String,
+        edges: Vec<Edge>,
+        roots: Vec<Root>,
+        rules: Vec<Rule>,
+        expressions: Vec<Expression>,
+    ) -> Cache {
+        Cache {
+            version: VERSION,
+            source: SOURCE.into(),
+            producer: producer(),
+            target,
+            generated_at: now(),
+            edges,
+            roots,
+            rules,
+            expressions,
+        }
     }
 
     /// Replaces a link at `path` rather than writing through it (0048).
@@ -142,13 +213,21 @@ mod tests {
 
     #[test]
     fn a_cache_names_what_produced_it() {
-        let c = Cache::new("dev".into(), Vec::new(), Vec::new());
+        let c = Cache::new("dev".into(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let text = serde_json::to_string(&c).unwrap();
         assert!(text.contains("\"source\":\"collin\""), "{text}");
         assert!(!text.contains("roots"), "a cache with no root reads as before: {text}");
+        assert!(!text.contains("rules") && !text.contains("expressions"), "nor with no rule or expression: {text}");
         assert!(text.contains("\"version\":1"), "{text}");
         let producer = format!("\"producer\":\"collin {}\"", env!("CARGO_PKG_VERSION"));
         assert!(text.contains(&producer), "{text}");
+    }
+
+    #[test]
+    fn a_cut_is_written_only_when_there_was_one() {
+        let one = |cut| Expression { node: "m".into(), column: "c".into(), kind: "cast".into(), text: "x".into(), steps: 1, cut };
+        assert!(!serde_json::to_string(&one(false)).unwrap().contains("cut"));
+        assert!(serde_json::to_string(&one(true)).unwrap().contains("\"cut\":true"));
     }
 
     /// A cache path that is a link planted in a project is replaced, not
@@ -163,7 +242,7 @@ mod tests {
         std::fs::write(&victim, "mine").unwrap();
         let path = dir.join("column_lineage.collin.json");
         std::os::unix::fs::symlink(&victim, &path).unwrap();
-        Cache::new("dev".into(), Vec::new(), Vec::new()).write(&path).unwrap();
+        Cache::new("dev".into(), Vec::new(), Vec::new(), Vec::new(), Vec::new()).write(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "mine");
         assert!(!std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
         assert!(std::fs::read_to_string(&path).unwrap().contains("\"source\":\"collin\""));

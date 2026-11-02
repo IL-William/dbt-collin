@@ -150,6 +150,10 @@ pub struct Run {
     pub edges: Vec<cache::Edge>,
     /// In the same order, and within a model by column.
     pub roots: Vec<cache::Root>,
+    /// In the same order. Empty unless the run asked for `--indirect`.
+    pub rules: Vec<cache::Rule>,
+    /// In the same order, and within a model by column.
+    pub expressions: Vec<cache::Expression>,
     pub report: Report,
 }
 
@@ -196,6 +200,10 @@ pub struct Seen<'a> {
     pub published_indirect: &'a [cache::Edge],
     /// The roots this model put in the cache, as written.
     pub published_roots: &'a [cache::Root],
+    /// The rules this model put in the cache, as written.
+    pub published_rules: &'a [cache::Rule],
+    /// The expressions this model put in the cache, as written.
+    pub published_expressions: &'a [cache::Expression],
 }
 
 /// The dbt unique_id behind a relation a model reads, or the `rel:` escape
@@ -216,11 +224,11 @@ fn node_for(project: &Project, read: &HashMap<String, Option<String>>, relation:
 
 pub fn generate(opts: &Options) -> Result<Outcome, String> {
     let Loaded { project, warehouse, catalog_elsewhere } = load(opts)?;
-    let Run { edges, roots, mut report } = run(&project, warehouse, opts);
+    let Run { edges, roots, rules, expressions, mut report } = run(&project, warehouse, opts);
     report.set_catalog_elsewhere(catalog_elsewhere);
     report.findings = crate::findings::of(&report);
     let (out, report_path) = (opts.out_path(), opts.report_path());
-    Cache::new(opts.target.clone(), edges, roots).write(&out)?;
+    Cache::new(opts.target.clone(), edges, roots, rules, expressions).write(&out)?;
     report.write(&report_path)?;
     Ok(Outcome { totals: report.totals, findings: report.findings, out, report: report_path })
 }
@@ -300,6 +308,8 @@ pub fn run_observed(
 
     let mut edges: Vec<cache::Edge> = Vec::new();
     let mut roots: Vec<cache::Root> = Vec::new();
+    let mut rules: Vec<cache::Rule> = Vec::new();
+    let mut expressions: Vec<cache::Expression> = Vec::new();
     // What each model's compile produced, kept past a retraction: a child's
     // read of a column its parent's list lacks is explained if the parent's own
     // compile has it.
@@ -449,6 +459,8 @@ pub fn run_observed(
             published: &published.edges[..published.direct],
             published_indirect: &published.edges[published.direct..],
             published_roots: &published.roots,
+            published_rules: &published.rules,
+            published_expressions: &published.expressions,
         });
         for a in &published.ambiguous {
             match a.by {
@@ -460,6 +472,8 @@ pub fn run_observed(
         rep.totals.edges_parsed += published.direct - published.inferred;
         rep.totals.edges_inferred += published.inferred;
         rep.totals.edges_indirect += published.edges.len() - published.direct;
+        rep.totals.rules += published.rules.len();
+        rep.totals.expressions += published.expressions.len();
 
         // Coverage and the per model edge count are both measured over the
         // direct edges alone: an indirect edge reaches every output column, so
@@ -715,6 +729,8 @@ pub fn run_observed(
 
         edges.extend(published.edges);
         roots.extend(published.roots);
+        rules.extend(published.rules);
+        expressions.extend(published.expressions);
     }
 
     for (parent, reads) in downstream {
@@ -743,7 +759,7 @@ pub fn run_observed(
     }
     rep.models.sort_by(|a, b| a.name.cmp(&b.name));
     rep.row_deciding_reads.sort_by(|a, b| a.name.cmp(&b.name));
-    Run { edges, roots, report: rep }
+    Run { edges, roots, rules, expressions, report: rep }
 }
 
 /// A name a compile reads through a `select *` over one relation whose list
@@ -1072,6 +1088,10 @@ struct Published {
     /// Inferred columns several parents could have given.
     ambiguous: Vec<Ambiguity>,
     roots: Vec<cache::Root>,
+    /// The predicates of the model, only when the run asked for the indirect
+    /// edges (0050).
+    rules: Vec<cache::Rule>,
+    expressions: Vec<cache::Expression>,
 }
 
 impl Published {
@@ -1146,6 +1166,7 @@ fn publish(
     // Only where the SQL is trusted, and onto the columns it is trusted for. If
     // the compile is not describing this model, what it reads is no more
     // believable than what it writes.
+    let mut rules = Vec::new();
     if plan != Plan::Inferred && opts.indirect {
         let outputs: Vec<String> = match plan {
             Plan::PerColumn => shared.to_vec(),
@@ -1153,7 +1174,15 @@ fn publish(
         };
         let fanned = fan_out(project, &read, model, &resolved.indirect, &outputs, &edges);
         edges.extend(fanned);
+        rules = rules_of(project, &read, model, resolved);
     }
+    // What computes a column is the SQL's word like a root, so it goes out where
+    // the edges go out parsed, onto the columns they are trusted for.
+    let expressions = match plan {
+        Plan::Parsed => expressions_of(project, &read, model, resolved, None),
+        Plan::PerColumn => expressions_of(project, &read, model, resolved, Some(shared)),
+        Plan::Inferred => Vec::new(),
+    };
     // A root is the SQL's word, so it goes out where the edges go out parsed
     // and nowhere else: a compile set aside is no account of its columns, and
     // a degraded one only of the columns its table shares. Never onto a column
@@ -1178,7 +1207,106 @@ fn publish(
             expressions: if r.complete { r.expressions.clone() } else { Vec::new() },
         })
         .collect();
-    Published { plan, edges, direct, inferred, bridged, ambiguous, roots }
+    Published { plan, edges, direct, inferred, bridged, ambiguous, roots, rules, expressions }
+}
+
+/// Where `cache::Expression::text` is cut. A few expressions run to thousands
+/// of characters, and the head of one says what it is.
+const EXPRESSION_CAP: usize = 500;
+
+/// The roles an expression is written for. A copy, a rename and a hash are said
+/// whole by their edges.
+fn worth_an_expression(kind: role::Role) -> bool {
+    matches!(kind, role::Role::Cast | role::Role::Transform | role::Role::Aggregate | role::Role::Window)
+}
+
+/// One entry for each output column whose direct edges include a cast, a
+/// transform, an aggregate or a window: the role of the loudest of them, the
+/// text it was ranked by, and the most expressions any path to a relation met.
+/// `only` limits it to the columns a degraded plan trusts. `read` is
+/// `claimants` for the model.
+///
+/// Rolled up from the engine's edges rather than from the cache's, which keep
+/// the role and not the text. The same edges are skipped as `parsed_edges`
+/// skips them, so a column fed only by the model's own self read has none.
+fn expressions_of(
+    project: &Project,
+    read: &HashMap<String, Option<String>>,
+    model: &Node,
+    resolved: &engine::Resolved,
+    only: Option<&[String]>,
+) -> Vec<cache::Expression> {
+    let own = norm_relation(&model.relation);
+    // Per column, the loudest edge so far and the greatest step count.
+    let mut by_column: std::collections::BTreeMap<&str, (role::Role, &str, u32)> = Default::default();
+    for e in &resolved.edges {
+        if only.is_some_and(|only| !only.contains(&e.to_column)) {
+            continue;
+        }
+        if node_for(project, read, &e.from_relation) == model.uid || e.from_relation == own {
+            continue;
+        }
+        let kind = role::classify(&e.expression, &e.from_column, &e.to_column);
+        let held = by_column.entry(e.to_column.as_str()).or_insert((kind, e.expression.as_str(), e.steps));
+        // The louder role stands, and of two as loud the greater text, as
+        // `put_edge` settles two paths to one edge, so that the engine's edge
+        // order does not decide it.
+        if kind.rank() > held.0.rank() || (kind.rank() == held.0.rank() && e.expression.as_str() > held.1) {
+            *held = (kind, e.expression.as_str(), held.2);
+        }
+        held.2 = held.2.max(e.steps);
+    }
+    by_column
+        .into_iter()
+        .filter(|(_, (kind, _, _))| worth_an_expression(*kind))
+        .map(|(column, (kind, text, steps))| {
+            let cut = text.chars().count() > EXPRESSION_CAP;
+            cache::Expression {
+                node: model.uid.clone(),
+                column: column.to_string(),
+                kind: kind.as_str().to_string(),
+                text: if cut { text.chars().take(EXPRESSION_CAP).collect() } else { text.to_string() },
+                steps,
+                cut,
+            }
+        })
+        .collect()
+}
+
+/// The predicates of a model, each with the relations' columns its names
+/// resolve to, mapped to the nodes an edge names. A column of the model itself
+/// (an incremental model's filter on its own table) is left out as the indirect
+/// edges leave it out. Two rules the same in clause, text and columns are one.
+fn rules_of(
+    project: &Project,
+    read: &HashMap<String, Option<String>>,
+    model: &Node,
+    resolved: &engine::Resolved,
+) -> Vec<cache::Rule> {
+    let own = norm_relation(&model.relation);
+    let mut seen: HashSet<(&str, &str, Vec<(String, String)>)> = HashSet::new();
+    let mut out = Vec::new();
+    for r in &resolved.rules {
+        let mut columns: Vec<(String, String)> = Vec::new();
+        for (relation, column) in &r.columns {
+            let from = node_for(project, read, relation);
+            if from == model.uid || *relation == own {
+                continue;
+            }
+            if !columns.iter().any(|(n, c)| *n == from && c == column) {
+                columns.push((from, column.clone()));
+            }
+        }
+        if seen.insert((r.clause, r.text.as_str(), columns.clone())) {
+            out.push(cache::Rule {
+                node: model.uid.clone(),
+                clause: r.clause.to_string(),
+                text: r.text.clone(),
+                columns: columns.into_iter().map(|(node, column)| cache::RuleColumn { node, column }).collect(),
+            });
+        }
+    }
+    out
 }
 
 /// Edges for the reads a trusted compile makes of names its own CTE does not
@@ -1886,6 +2014,7 @@ mod tests {
             from_column: col.into(),
             to_column: col.into(),
             expression: String::new(),
+            steps: 0,
         }
     }
 
@@ -1909,7 +2038,7 @@ mod tests {
             .into();
         let mut behind = node("model.p.behind", "db.sch.behind", &["source.p.raw"], &[]);
         behind.1.sql =
-            "select id as order_id, amount as total from db.sch.raw where status = 'void'".into();
+            "select id as order_id, amount * 2 as total from db.sch.raw where status = 'void'".into();
         let warehouse = HashMap::from([
             ("source.p.raw".to_string(), cols(&["amount", "id", "status"])),
             ("model.p.orders".to_string(), cols(&["channel", "doubled", "id"])),
@@ -1974,6 +2103,254 @@ mod tests {
                 true => assert_eq!(onto_roots, vec!["filter", "filter"]),
             }
         }
+    }
+
+    /// Two sources, `db.sch.raw` (id, status, amount, ts, cid) and `db.sch.cust`
+    /// (id, name), and one model of `outputs` that `sql` computes, whose list
+    /// the warehouse confirms so that its compile is trusted whole.
+    fn ruled(sql: &str, outputs: &[&str], indirect: bool) -> Run {
+        let mut raw = node("source.p.raw", "db.sch.raw", &[], &[]);
+        raw.1.kind = "source".into();
+        let mut cust = node("source.p.cust", "db.sch.cust", &[], &[]);
+        cust.1.kind = "source".into();
+        let mut m = node("model.p.m", "db.sch.m", &["source.p.raw", "source.p.cust"], &[]);
+        m.1.sql = sql.into();
+        let warehouse = HashMap::from([
+            ("source.p.raw".to_string(), cols(&["amount", "cid", "id", "status", "ts"])),
+            ("source.p.cust".to_string(), cols(&["id", "name"])),
+            ("model.p.m".to_string(), cols(outputs)),
+        ]);
+        run(&project_of(vec![raw, cust, m]), warehouse, &opts(true, indirect))
+    }
+
+    /// What a run gives as rules: clause, text, and the columns as `source.col`.
+    fn ruling(r: &Run) -> Vec<(&str, &str, Vec<String>)> {
+        r.rules
+            .iter()
+            .map(|rule| {
+                let cols = rule.columns.iter().map(|c| format!("{}.{}", c.node.rsplit('.').next().unwrap(), c.column));
+                (rule.clause.as_str(), rule.text.as_str(), cols.collect())
+            })
+            .collect()
+    }
+
+    fn worded(r: &Run) -> Vec<(&str, &str, &str, u32, bool)> {
+        r.expressions
+            .iter()
+            .map(|e| (e.column.as_str(), e.kind.as_str(), e.text.as_str(), e.steps, e.cut))
+            .collect()
+    }
+
+    #[test]
+    fn each_clause_gives_a_rule_with_the_columns_its_names_resolve_to() {
+        let cases: [(&str, &[&str], (&str, &str, Vec<&str>)); 5] = [
+            ("select id from db.sch.raw where status <> 'cancelled'", &["id"], ("WHERE", "status <> 'cancelled'", vec!["raw.status"])),
+            (
+                "select status, count(*) as n from db.sch.raw group by status having count(*) > 1 and status <> 'x'",
+                &["n", "status"],
+                ("HAVING", "count(*) > 1 AND status <> 'x'", vec!["raw.status"]),
+            ),
+            (
+                "select id from db.sch.raw qualify row_number() over (partition by id order by ts desc) = 1",
+                &["id"],
+                ("QUALIFY", "row_number() OVER (PARTITION BY id ORDER BY ts DESC) = 1", vec!["raw.id", "raw.ts"]),
+            ),
+            (
+                "select r.id from db.sch.raw r join db.sch.cust c on r.cid = c.id",
+                &["id"],
+                ("JOIN", "r.cid = c.id", vec!["raw.cid", "cust.id"]),
+            ),
+            (
+                "select r.amount from db.sch.raw r join db.sch.cust c using (id)",
+                &["amount"],
+                ("JOIN", "USING (id)", vec!["raw.id", "cust.id"]),
+            ),
+        ];
+        for (sql, outputs, (clause, text, columns)) in cases {
+            let on = ruled(sql, outputs, true);
+            let want: Vec<String> = columns.iter().map(|c| c.to_string()).collect();
+            assert_eq!(ruling(&on), vec![(clause, text, want)], "{sql}");
+            assert!(ruled(sql, outputs, false).rules.is_empty(), "no rule without --indirect: {sql}");
+        }
+    }
+
+    #[test]
+    fn a_predicate_in_a_cte_keeps_its_alias_and_names_the_real_column() {
+        let r = ruled(
+            "with s as (select id, status as st from db.sch.raw) select id from s where st = 'open'",
+            &["id"],
+            true,
+        );
+        assert_eq!(ruling(&r), vec![("WHERE", "st = 'open'", vec!["raw.status".to_string()])]);
+    }
+
+    #[test]
+    fn the_same_predicate_in_two_ctes_is_two_rules_unless_they_are_identical() {
+        // Same text over two relations: two rules, each with its own column.
+        let r = ruled(
+            "with a as (select id from db.sch.raw where id > 0), b as (select id as bid from db.sch.cust where id > 0) \
+             select a.id from a join b on a.id = b.bid",
+            &["id"],
+            true,
+        );
+        let wheres: Vec<_> = ruling(&r).into_iter().filter(|(c, ..)| *c == "WHERE").collect();
+        assert_eq!(
+            wheres,
+            vec![("WHERE", "id > 0", vec!["raw.id".to_string()]), ("WHERE", "id > 0", vec!["cust.id".to_string()])]
+        );
+        // Same text over the same column: one.
+        let r = ruled(
+            "with a as (select id from db.sch.raw where status = 'open'), b as (select id as bid from db.sch.raw where status = 'open') \
+             select a.id from a join b on a.id = b.bid",
+            &["id"],
+            true,
+        );
+        assert_eq!(ruling(&r).iter().filter(|(c, ..)| *c == "WHERE").count(), 1);
+    }
+
+    /// Every `SELECT`'s `WHERE` is a rule, a subquery's included. The outer one
+    /// lists the names placed in its own `SELECT` and those its subquery's
+    /// select list reads, each in the scope that wrote it; the subquery's own
+    /// `WHERE` is another rule with its own names.
+    #[test]
+    fn a_subquery_has_a_rule_of_its_own_and_the_outer_one_lists_the_placed_columns_only() {
+        let r = ruled(
+            "select id from db.sch.raw where id in (select c.id from db.sch.cust as c where c.name = 'x')",
+            &["id"],
+            true,
+        );
+        let ids = vec!["raw.id".to_string(), "cust.id".to_string()];
+        assert_eq!(
+            ruling(&r),
+            vec![
+                ("WHERE", "id IN (SELECT c.id FROM db.sch.cust AS c WHERE c.name = 'x')", ids),
+                ("WHERE", "c.name = 'x'", vec!["cust.name".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rule_comes_in_the_order_of_its_select_and_of_sql_inside_it() {
+        let r = ruled(
+            "with s as (select id from db.sch.raw where status = 'open') \
+             select s.id from s join db.sch.cust c on s.id = c.id where c.name <> 'x'",
+            &["id"],
+            true,
+        );
+        let order: Vec<&str> = r.rules.iter().map(|x| x.clause.as_str()).collect();
+        assert_eq!(order, vec!["JOIN", "WHERE", "WHERE"], "outermost select first, its join before its where");
+        assert_eq!(r.rules[2].text, "status = 'open'");
+    }
+
+    #[test]
+    fn a_cast_gives_an_expression_and_a_copy_a_rename_or_a_hash_none() {
+        let r = ruled(
+            "select cast(amount as decimal(18, 4)) as amount, id, status as state, md5(cid) as hk from db.sch.raw",
+            &["amount", "hk", "id", "state"],
+            false,
+        );
+        assert_eq!(worded(&r), vec![("amount", "cast", "CAST(amount AS DECIMAL(18,4))", 1, false)]);
+    }
+
+    #[test]
+    fn a_model_whose_compile_is_set_aside_gives_neither_list() {
+        // `shop()`'s `behind` is built from older code than its compile.
+        let (project, warehouse) = shop();
+        let r = run(&project, warehouse, &opts(true, true));
+        assert!(r.rules.iter().all(|x| x.node != "model.p.behind"));
+        assert!(r.expressions.iter().all(|x| x.node != "model.p.behind"));
+        assert!(r.rules.iter().any(|x| x.node == "model.p.orders"), "the trusted one has its rule");
+        let doubled: Vec<&str> =
+            r.expressions.iter().filter(|x| x.node == "model.p.orders").map(|x| x.column.as_str()).collect();
+        assert_eq!(doubled, vec!["doubled"], "the trusted one has its expression, which `behind` would too if let out");
+    }
+
+    #[test]
+    fn a_degraded_compile_gives_expressions_for_the_columns_it_is_trusted_for_only() {
+        // The table has `amount` and `id` of the compile's columns and `extra`
+        // besides; `note` is the compile's alone.
+        let r = ruled(
+            "select cast(amount as decimal(18,4)) as amount, upper(status) as note, id from db.sch.raw \
+             where status = 'open'",
+            &["amount", "extra", "id"],
+            true,
+        );
+        let columns: Vec<&str> = r.expressions.iter().map(|e| e.column.as_str()).collect();
+        assert_eq!(columns, vec!["amount"], "not `note`, which the table does not have");
+        // The rules are the SQL's own and are written whole for a degraded compile.
+        assert_eq!(ruling(&r).len(), 1);
+    }
+
+    /// Two paths to one column pair, each with an expression as loud as the
+    /// other: the greater text stands, whichever branch is written first (0032).
+    /// On a single path the walk keeps the outer of two as loud, which no
+    /// edge's merge ever sees.
+    #[test]
+    fn a_tie_goes_to_the_greater_text_0032() {
+        for (first, second) in [("upper(status)", "left(status, 3)"), ("left(status, 3)", "upper(status)")] {
+            // Through two CTEs, since the engine drops the second of two
+            // branches off one relation before the walk starts.
+            let sql = format!(
+                "with a as (select {first} as y from db.sch.raw), b as (select {second} as y from db.sch.raw) \
+                 select y as z from a union all select y from b"
+            );
+            let r = ruled(&sql, &["z"], false);
+            assert_eq!(worded(&r), vec![("z", "transform", "upper(status)", 1, false)], "{sql}");
+        }
+        // One path: the outer text is held, though the inner one is greater.
+        let r = ruled(
+            "with c1 as (select upper(status) as y from db.sch.raw) select left(y, 3) as z from c1",
+            &["z"],
+            false,
+        );
+        assert_eq!(worded(&r), vec![("z", "transform", "left(y, 3)", 2, false)]);
+    }
+
+    #[test]
+    fn the_steps_count_the_expressions_along_the_longest_path() {
+        let scaled = ruled(
+            "with c1 as (select sum(amount) as t from db.sch.raw) select t * 1.2 as g from c1",
+            &["g"],
+            false,
+        );
+        assert_eq!(worded(&scaled), vec![("g", "aggregate", "sum(amount)", 2, false)]);
+        // `status` goes through `left`, `id` through nothing: the longer path counts.
+        let joined = ruled(
+            "with c1 as (select left(status, 3) as a, id as b from db.sch.raw) select concat(a, b) as ab from c1",
+            &["ab"],
+            false,
+        );
+        assert_eq!(worded(&joined), vec![("ab", "transform", "concat(a, b)", 2, false)]);
+        // A rename between two expressions is no step of its own.
+        let renamed = ruled(
+            "with c1 as (select cast(amount as decimal(18,4)) as a from db.sch.raw), c2 as (select a as b from c1) \
+             select b + 1 as t from c2",
+            &["t"],
+            false,
+        );
+        assert_eq!(worded(&renamed), vec![("t", "transform", "b + 1", 2, false)]);
+    }
+
+    #[test]
+    fn a_recursive_cte_does_not_count_steps_for_ever() {
+        // Every lap round the loop meets the expression again; the count has a
+        // ceiling or the walk, which keys its states by it, would never end.
+        let r = ruled(
+            "with recursive t as (select id as n from db.sch.raw union all select n + 1 from t where n < 5) select n from t",
+            &["n"],
+            false,
+        );
+        assert_eq!(worded(&r), vec![("n", "transform", "n + 1", engine::MAX_STEPS, false)]);
+    }
+
+    #[test]
+    fn a_long_expression_is_cut_and_says_so() {
+        let long = format!("select concat({}) as c from db.sch.raw", vec!["status"; 100].join(", "));
+        let r = ruled(&long, &["c"], false);
+        let [e] = r.expressions.as_slice() else { panic!("{:?}", worded(&r)) };
+        assert_eq!((e.text.chars().count(), e.cut), (500, true));
+        let short = ruled("select concat(status, id) as c from db.sch.raw", &["c"], false);
+        assert!(!short.expressions[0].cut);
     }
 
     #[test]
@@ -4274,7 +4651,11 @@ mod tests {
             }
             let edges = |v: &serde_json::Value| -> HashSet<String> {
                 let listed = |k: &str| v[k].as_array().cloned().unwrap_or_default();
-                listed("edges").into_iter().chain(listed("roots")).map(|e| e.to_string()).collect()
+                ["edges", "roots", "rules", "expressions"]
+                    .into_iter()
+                    .flat_map(listed)
+                    .map(|e| e.to_string())
+                    .collect()
             };
             let (w, g) = (edges(&want), edges(&got));
             let only = |a: &HashSet<String>, b: &HashSet<String>| -> String {
@@ -4292,13 +4673,16 @@ mod tests {
         }
     }
 
-    /// The cache with one edge a line, and one root, so that the diff of an
-    /// expected cache shows each that moved and nothing else.
+    /// The cache with one edge a line, and one root, rule and expression, so
+    /// that the diff of an expected cache shows each that moved and nothing else.
     fn one_edge_a_line(cache: &serde_json::Value) -> String {
         let mut head = cache.clone();
         let fields = head.as_object_mut().unwrap();
         let lists: Vec<(&str, serde_json::Value)> =
-            ["edges", "roots"].into_iter().filter_map(|k| fields.remove(k).map(|v| (k, v))).collect();
+            ["edges", "roots", "rules", "expressions"]
+                .into_iter()
+                .filter_map(|k| fields.remove(k).map(|v| (k, v)))
+                .collect();
         let head = head.to_string();
         let mut out = head[..head.len() - 1].to_string();
         for (k, v) in lists {

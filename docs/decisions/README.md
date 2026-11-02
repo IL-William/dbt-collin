@@ -55,6 +55,7 @@ is built this way, for whoever changes it next.
 | [0047](0047-a-seed-s-columns-are-its-file-s-header.md) | A seed's columns are its file's header | changing what is known of a seed's columns, how a CSV header is read, or which files `generate` reads from the project |
 | [0048](0048-a-file-the-manifest-names-is-read-inside-the-folder-it-came-from.md) | A file the manifest names is read inside the folder it came from | changing how a compiled file or a seed's CSV is opened, or how the cache and the report are written |
 | [0049](0049-a-correlated-name-is-read-where-its-qualifier-is-defined.md) | A correlated name is read where its qualifier is defined | changing which sources a `WHERE` or a `HAVING` binds its names to, or what a nested query is allowed to see of the one around it |
+| [0050](0050-a-model-s-rules-and-a-column-s-expression-go-in-the-cache.md) | A model's rules and a column's expression go in the cache | changing what `Rule` or `Expression` carry, adding a list to the cache, or reading a predicate or an expression text out of the engine |
 
 ## The other side of the boundary
 

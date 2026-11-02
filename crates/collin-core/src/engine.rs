@@ -63,6 +63,28 @@ pub struct RawEdge {
     pub to_column: String,
     /// The SQL text behind the output column, empty when it was copied through.
     pub expression: String,
+    /// How many expressions the walk met on the path that reached this edge:
+    /// the longest of them when several did (`put_edge`). A plain copy or a
+    /// rename is none. Saturates at `MAX_STEPS`.
+    pub steps: u32,
+}
+
+/// Where `RawEdge::steps` stops counting. A recursive CTE meets its own
+/// expression once more on every lap, and the walk keys its states by the
+/// count, so without a ceiling it would never end.
+pub const MAX_STEPS: u32 = 32;
+
+/// A predicate a model applies, with the columns its names resolve to, read
+/// where the predicate is written (0050).
+pub struct RuleRead {
+    /// `WHERE`, `HAVING`, `QUALIFY` or `JOIN`.
+    pub clause: &'static str,
+    /// The predicate as the engine's parser prints it: the names as written,
+    /// a CTE's alias included, keywords and spacing normalised.
+    pub text: String,
+    /// `(Uppercased DB.SCHEMA.NAME, column)`, in the order the names are
+    /// written, each pair once. A name that could not be placed is not here.
+    pub columns: Vec<(String, String)>,
 }
 
 /// An issue the engine raised, kept whole rather than reduced to its code.
@@ -150,6 +172,13 @@ pub struct Resolved {
     /// predicates, and the partition and order keys of a `QUALIFY`. Whether a
     /// column is projected as well is another matter; see `IndirectRead`.
     pub indirect: Vec<IndirectRead>,
+    /// The same clauses as predicates rather than as columns: one per
+    /// `WHERE`, `HAVING`, `QUALIFY` and `JOIN` of the statement, a `SELECT` at
+    /// a time, outermost first and then the ones it holds, its joins before its
+    /// `WHERE`. A subquery has rules of its own, its `WHERE` included; the names
+    /// of its select list are read for the predicate that holds it and listed
+    /// in that predicate's rule.
+    pub rules: Vec<RuleRead>,
     /// Output columns that no relation feeds, because the SQL builds them from
     /// literals: `cast(null as text) as x`, `current_timestamp() as loaded_at`,
     /// whether in the final select or in a CTE the column is copied out of.
@@ -413,6 +442,14 @@ fn star_sources(query: &Query) -> Vec<String> {
 /// the names the select list of a subquery inside such a predicate reads, with
 /// what that subquery reads.
 struct Predicate {
+    /// `WHERE` or `HAVING`, and the predicate printed, for the rule it makes.
+    clause: &'static str,
+    text: String,
+    /// The subquery of the predicate before it, whose select list reads names
+    /// that belong to that predicate's rule, not to one of their own.
+    sub: bool,
+    /// Which `SELECT` of the statement wrote it, see `Qualifies::selects`.
+    select: usize,
     sources: Vec<(String, Option<String>)>,
     names: Vec<(Option<String>, String)>,
     /// What the `FROM` of its `SELECT` calls its factors, `select_sources`
@@ -497,6 +534,9 @@ impl Visitor for ExprSubqueries {
 
 /// The keys of one `JOIN`, with what its `SELECT` reads.
 struct JoinKeys {
+    /// The `ON` printed, or `USING (a, b)`, for the rule it makes.
+    text: String,
+    select: usize,
     sources: Vec<(String, Option<String>)>,
     /// Names its `ON` reads, qualifier first when written.
     on: Vec<(Option<String>, String)>,
@@ -623,6 +663,9 @@ impl Shadow {
 
 /// A `QUALIFY`, with what its own `SELECT` reads and the names it reads.
 struct Qualify {
+    /// The clause printed, an alias in it left as written, for the rule it makes.
+    text: String,
+    select: usize,
     /// Each `FROM` and `JOIN` source: its name as written, lower case, and
     /// the alias it goes by, if any. A derived table has only its alias.
     sources: Vec<(String, Option<String>)>,
@@ -684,12 +727,17 @@ struct Qualifies {
     /// whole walk, so an address names one query, and an outer query is
     /// visited before the ones it holds, which is when it fills this in.
     enclosing: HashMap<usize, Vec<Scope>>,
+    /// How many `SELECT`s have been read, which orders the rules of a statement
+    /// the way the walk meets them. Carried from one statement to the next.
+    selects: usize,
 }
 
 impl Qualifies {
     fn body(&mut self, expr: &SetExpr, outer: &[Scope]) {
         match expr {
             SetExpr::Select(select) => {
+                let at = self.selects;
+                self.selects += 1;
                 let sources = select_sources(select);
                 // A subquery in the select list, the `WHERE` or the `HAVING`
                 // sees this `SELECT`'s sources, then those it sees itself. A
@@ -708,8 +756,17 @@ impl Qualifies {
                         self.enclosing.insert(address, chain.clone());
                     }
                 }
-                for predicate in select.selection.iter().chain(select.having.iter()) {
+                let clauses = select
+                    .selection
+                    .iter()
+                    .map(|p| ("WHERE", p))
+                    .chain(select.having.iter().map(|p| ("HAVING", p)));
+                for (clause, predicate) in clauses {
                     self.predicates.push(Predicate {
+                        clause,
+                        text: predicate.to_string(),
+                        sub: false,
+                        select: at,
                         sources: sources.clone(),
                         names: names_in(predicate),
                         shadow: shadow.clone(),
@@ -726,6 +783,11 @@ impl Qualifies {
                                 })
                                 .collect();
                             self.predicates.push(Predicate {
+                                clause,
+                                // The rule is the held predicate's, written once.
+                                text: String::new(),
+                                sub: true,
+                                select: at,
                                 sources: select_sources(inner),
                                 names,
                                 shadow: Shadow::of(inner),
@@ -745,9 +807,10 @@ impl Qualifies {
                             J::AsOf { constraint, .. } => Some(constraint),
                             _ => None,
                         };
-                        let (on, using) = match constraint {
-                            Some(JoinConstraint::On(expr)) => (names_in(expr), Vec::new()),
+                        let (text, on, using) = match constraint {
+                            Some(JoinConstraint::On(expr)) => (expr.to_string(), names_in(expr), Vec::new()),
                             Some(JoinConstraint::Using(names)) => (
+                                format!("USING ({})", names.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ")),
                                 Vec::new(),
                                 names
                                     .iter()
@@ -756,7 +819,7 @@ impl Qualifies {
                             ),
                             _ => continue,
                         };
-                        self.joins.push(JoinKeys { sources: sources.clone(), on, using });
+                        self.joins.push(JoinKeys { text, select: at, sources: sources.clone(), on, using });
                     }
                 }
                 let Some(qualify) = &select.qualify else { return };
@@ -776,7 +839,7 @@ impl Qualifies {
                         _ => names.push((qualifier, name)),
                     }
                 }
-                self.qualifies.push(Qualify { sources, names });
+                self.qualifies.push(Qualify { text: qualify.to_string(), select: at, sources, names });
             }
             SetExpr::SetOperation { left, right, .. } => {
                 self.body(left, outer);
@@ -1015,6 +1078,8 @@ struct Scopes {
     joins: Vec<JoinKeys>,
     predicates: Vec<Predicate>,
     orderings: Vec<Ordering>,
+    /// How many `SELECT`s the statements held, see `Qualifies::selects`.
+    selects: usize,
 }
 
 /// Every name the SQL gives to two scopes of one statement, see `MergedScope`,
@@ -1033,8 +1098,9 @@ fn scopes(sql: &str, dialect: Dialect) -> Scopes {
     for statement in &statements {
         let mut names = ScopeNames::default();
         let _ = statement.visit(&mut names);
-        let mut read = Qualifies::default();
+        let mut read = Qualifies { selects: out.selects, ..Default::default() };
         let _ = statement.visit(&mut read);
+        out.selects = read.selects;
         out.qualifies.extend(read.qualifies);
         out.joins.extend(read.joins);
         out.predicates.extend(read.predicates);
@@ -1972,7 +2038,7 @@ fn qualified_tails(expr: &str) -> Vec<String> {
 /// two expressions stands (0009), and of two as loud the greater text, so that
 /// neither the role nor the text depends on which path the walk took first:
 /// the engine lists its edges in no order the SQL decides, and swapping the
-/// branches of a union swapped the role.
+/// branches of a union swapped the role. The steps are the greater of the two.
 fn put_edge(edges: &mut Vec<RawEdge>, at: &mut HashMap<(String, String, String), usize>, edge: RawEdge) {
     let key = (edge.from_relation.clone(), edge.from_column.clone(), edge.to_column.clone());
     match at.get(&key) {
@@ -1989,6 +2055,9 @@ fn put_edge(edges: &mut Vec<RawEdge>, at: &mut HashMap<(String, String, String),
             if now > was || (now == was && edge.expression > *held) {
                 edges[i].expression = edge.expression;
             }
+            // The longest path stands, whichever path gave the text: the text
+            // says what the column is, the count how far it travelled.
+            edges[i].steps = edges[i].steps.max(edge.steps);
         }
     }
 }
@@ -2078,6 +2147,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         joins,
         predicates,
         orderings,
+        selects: _,
     } =
         scopes(sql, split_dialect(adapter));
     out.merged_scopes = merged;
@@ -2251,15 +2321,19 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         // a plain copy the one before it. A name belongs to the scope that
         // wrote it, and the loudest text can come from a scope further out,
         // whose names are another scope's columns.
-        let mut stack: Vec<(&str, bool, Option<&str>, Option<&str>)> =
-            vec![(&col.id, false, col.expression.as_deref(), col.expression.as_deref())];
+        // The fifth is the expressions met so far (`RawEdge::steps`).
+        let mut stack: Vec<(&str, bool, Option<&str>, Option<&str>, u32)> =
+            vec![(&col.id, false, col.expression.as_deref(), col.expression.as_deref(), 0)];
         // Keyed by the whole state, so that a node two paths reach is read for
         // each text and weighed for each role: the first path to arrive must
-        // not decide either (0009, 0031). Every text is the engine's, so the
-        // states are finite and a recursive CTE still ends.
-        let mut visited: HashSet<(&str, bool, Option<&str>, Option<&str>)> = HashSet::new();
-        while let Some((id, derived, expr, reading)) = stack.pop() {
-            if !visited.insert((id, derived, expr, reading)) {
+        // not decide either (0009, 0031). The count of expressions met is in the
+        // key too, so that a node reached by a longer path is walked again and
+        // the longest count reaches the edge. The states are finite because the
+        // texts are the engine's and the count stops at `MAX_STEPS`: a recursive
+        // CTE ends by that ceiling, one more lap giving a new state until then.
+        let mut visited: HashSet<(&str, bool, Option<&str>, Option<&str>, u32)> = HashSet::new();
+        while let Some((id, derived, expr, reading, steps)) = stack.pop() {
+            if !visited.insert((id, derived, expr, reading, steps)) {
                 continue;
             }
             // A derivation the engine hung off the relation itself rather than
@@ -2279,6 +2353,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                     from_column,
                                     to_column: to_column.clone(),
                                     expression: text.to_string(),
+                                    steps,
                                 },
                             );
                         }
@@ -2311,7 +2386,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                         let names: HashSet<String> = labels.keys().cloned().collect();
                         for want in columns_named_in(text, &names) {
                             if let Some(next) = labels.get(&want) {
-                                stack.push((next, true, expr, Some(text)));
+                                stack.push((next, true, expr, Some(text), steps));
                             }
                         }
                     }
@@ -2332,6 +2407,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                     from_column,
                                     to_column: to_column.clone(),
                                     expression: text.to_string(),
+                                    steps,
                                 },
                             );
                             continue;
@@ -2402,6 +2478,14 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                     // beyond holds none of them; otherwise against the scope
                     // the column comes from, a table giving the edge at once, a
                     // CTE the columns to go on from (see `over_clauses`).
+                    // The expression this hop is, if it is one. A copy has
+                    // none, and a derivation hung off a CTE was counted at the
+                    // hop that led there.
+                    let steps = if edge_expr.is_some_and(|e| !e.trim().is_empty()) {
+                        (steps + 1).min(MAX_STEPS)
+                    } else {
+                        steps
+                    };
                     let keys = edge_expr.and_then(|own| ordered(id, own));
                     if let Some((keys, _)) = &keys {
                         for key in keys {
@@ -2414,9 +2498,10 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                         from_column: from_column.clone(),
                                         to_column: to_column.clone(),
                                         expression: text.unwrap_or_default().to_string(),
+                                        steps,
                                     },
                                 ),
-                                OrderingKey::Walk(next) => stack.push((next, true, text, None)),
+                                OrderingKey::Walk(next) => stack.push((next, true, text, None, steps)),
                             }
                         }
                     } else if let (Some(own), Some(scope)) =
@@ -2435,6 +2520,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                             from_column,
                                             to_column: to_column.clone(),
                                             expression: text.unwrap_or_default().to_string(),
+                                            steps,
                                         },
                                     );
                                 }
@@ -2448,7 +2534,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                 let names: HashSet<String> = labels.keys().cloned().collect();
                                 for want in columns_named_in(body, &names) {
                                     if let Some(next) = labels.get(&want) {
-                                        stack.push((next, true, text, Some(own)));
+                                        stack.push((next, true, text, Some(own), steps));
                                     }
                                 }
                             }
@@ -2458,7 +2544,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                         Some((_, unordered)) => Some(unordered),
                         None => edge_expr.or(reading),
                     };
-                    stack.push((from, carried, text, reading));
+                    stack.push((from, carried, text, reading, steps));
                 }
             }
         }
@@ -2550,22 +2636,35 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
             }
         }
     };
+    // The same placements again, kept by clause as the rules of the statement
+    // (0050): a rule reads its names the way the indirect reads above do, so
+    // that the two cannot disagree about where a name leads.
+    let mut rules: Vec<((usize, u8), RuleRead)> = Vec::new();
     for q in &qualifies {
+        let mut columns = Vec::new();
         for (qualifier, name) in &q.names {
             match place(&q.sources, qualifier, name) {
-                Some(pairs) => record(pairs, crate::role::Role::DedupKey, &mut out),
+                Some(pairs) => {
+                    columns.extend(pairs.iter().cloned());
+                    record(pairs, crate::role::Role::DedupKey, &mut out)
+                }
                 None => out.unplaced_qualify += 1,
             }
         }
+        rules.push(((q.select, 3), RuleRead { clause: "QUALIFY", text: q.text.clone(), columns }));
     }
     // A join key, read where the JOIN is written, in the scope of its SELECT:
     // the engine hands over a join's condition only for a relation feeding no
     // output, and only the side that relation is on. A `USING` column is on
     // both sides by definition, so every source having it is credited.
     for j in &joins {
+        let mut columns = Vec::new();
         for (qualifier, name) in &j.on {
             match place(&j.sources, qualifier, name) {
-                Some(pairs) => record(pairs, crate::role::Role::JoinKey, &mut out),
+                Some(pairs) => {
+                    columns.extend(pairs.iter().cloned());
+                    record(pairs, crate::role::Role::JoinKey, &mut out)
+                }
                 None => out.unplaced_join += 1,
             }
         }
@@ -2573,10 +2672,12 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
             for (source, alias) in &j.sources {
                 let one = [(source.clone(), alias.clone())];
                 if let Some(pairs) = place(&one, &None, name) {
+                    columns.extend(pairs.iter().cloned());
                     record(pairs, crate::role::Role::JoinKey, &mut out);
                 }
             }
         }
+        rules.push(((j.select, 0), RuleRead { clause: "JOIN", text: j.text.clone(), columns }));
     }
     // A filter read in the scope of its SELECT. The engine localises a
     // predicate to a table it reads directly, and those stand; one over a
@@ -2593,6 +2694,11 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         })
     };
     for p in &predicates {
+        // A subquery follows the predicate that holds it and reads for it.
+        if !p.sub {
+            let rank = if p.clause == "WHERE" { 1 } else { 2 };
+            rules.push(((p.select, rank), RuleRead { clause: p.clause, text: p.text.clone(), columns: Vec::new() }));
+        }
         for (qualifier, name) in &p.names {
             let scope = match qualifier {
                 Some(qn) if !binds_in(&p.sources, qn) => {
@@ -2621,10 +2727,23 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                 _ => &p.sources,
             };
             match place(scope, qualifier, name) {
-                Some(pairs) => record(pairs, crate::role::Role::Filter, &mut out),
+                Some(pairs) => {
+                    if let Some((_, rule)) = rules.last_mut() {
+                        rule.columns.extend(pairs.iter().cloned());
+                    }
+                    record(pairs, crate::role::Role::Filter, &mut out)
+                }
                 None => out.unplaced_filter += 1,
             }
         }
+    }
+    // SQL order inside a `SELECT`, and the walk's order between them; the sort
+    // is stable, so two clauses of one kind stay in the order they were read.
+    rules.sort_by_key(|(at, _)| *at);
+    for (_, mut rule) in rules {
+        let mut once = HashSet::new();
+        rule.columns.retain(|c| once.insert(c.clone()));
+        out.rules.push(rule);
     }
     out.indirect.sort_by(|a, b| {
         (&a.relation, &a.column, a.role.as_str()).cmp(&(&b.relation, &b.column, b.role.as_str()))
