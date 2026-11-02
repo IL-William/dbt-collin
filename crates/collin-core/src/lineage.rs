@@ -1212,7 +1212,14 @@ fn publish(
 
 /// Where `cache::Expression::text` is cut. A few expressions run to thousands
 /// of characters, and the head of one says what it is.
-const EXPRESSION_CAP: usize = 500;
+const TEXT_CAP: usize = 500;
+
+/// `text` cut at `TEXT_CAP` characters, on a character boundary, and whether it
+/// was. Shared by the two texts the cache cuts, a rule's and an expression's.
+fn cut_text(text: &str) -> (String, bool) {
+    let cut = text.chars().count() > TEXT_CAP;
+    (if cut { text.chars().take(TEXT_CAP).collect() } else { text.to_string() }, cut)
+}
 
 /// The roles an expression is written for. A copy, a rename and a hash are said
 /// whole by their edges.
@@ -1220,9 +1227,10 @@ fn worth_an_expression(kind: role::Role) -> bool {
     matches!(kind, role::Role::Cast | role::Role::Transform | role::Role::Aggregate | role::Role::Window)
 }
 
-/// One entry for each output column whose direct edges include a cast, a
-/// transform, an aggregate or a window: the role of the loudest of them, the
-/// text it was ranked by, and the most expressions any path to a relation met.
+/// One entry for each output column whose loudest direct edge is a cast, a
+/// transform, an aggregate or a window: its role, the text it was ranked by,
+/// and the most expressions any path to a relation met. A column whose loudest
+/// edge is a hash has none, though another edge of it be a transform.
 /// `only` limits it to the columns a degraded plan trusts. `read` is
 /// `claimants` for the model.
 ///
@@ -1260,12 +1268,12 @@ fn expressions_of(
         .into_iter()
         .filter(|(_, (kind, _, _))| worth_an_expression(*kind))
         .map(|(column, (kind, text, steps))| {
-            let cut = text.chars().count() > EXPRESSION_CAP;
+            let (text, cut) = cut_text(text);
             cache::Expression {
                 node: model.uid.clone(),
                 column: column.to_string(),
                 kind: kind.as_str().to_string(),
-                text: if cut { text.chars().take(EXPRESSION_CAP).collect() } else { text.to_string() },
+                text,
                 steps,
                 cut,
             }
@@ -1298,10 +1306,12 @@ fn rules_of(
             }
         }
         if seen.insert((r.clause, r.text.as_str(), columns.clone())) {
+            let (text, cut) = cut_text(&r.text);
             out.push(cache::Rule {
                 node: model.uid.clone(),
                 clause: r.clause.to_string(),
-                text: r.text.clone(),
+                text,
+                cut,
                 columns: columns.into_iter().map(|(node, column)| cache::RuleColumn { node, column }).collect(),
             });
         }
@@ -2341,6 +2351,18 @@ mod tests {
             false,
         );
         assert_eq!(worded(&r), vec![("n", "transform", "n + 1", engine::MAX_STEPS, false)]);
+    }
+
+    #[test]
+    fn a_rule_text_past_500_characters_is_cut_and_says_so() {
+        let list = (1..=300).map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+        let r = ruled(&format!("select id from db.sch.raw where id in ({list})"), &["id"], true);
+        let [long] = r.rules.as_slice() else { panic!("{:?}", ruling(&r)) };
+        assert_eq!((long.text.chars().count(), long.cut), (500, true));
+        assert!(serde_json::to_string(long).unwrap().contains("\"cut\":true"));
+        let short = ruled("select id from db.sch.raw where status = 'open'", &["id"], true);
+        assert!(!short.rules[0].cut);
+        assert!(!serde_json::to_string(&short.rules[0]).unwrap().contains("cut"));
     }
 
     #[test]

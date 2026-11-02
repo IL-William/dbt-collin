@@ -91,9 +91,11 @@ where they cost one edge per output column, which on the corpus below more than
 doubles the file ([0011](docs/decisions/0011-an-indirect-edge-and-what-it-fans-out-to.md)).
 The predicates themselves come with it, as `rules` beside the edges: one for each
 `WHERE`, `HAVING`, `QUALIFY` and `JOIN` of every `SELECT` of a model, a
-subquery's included, with its text and the columns its names resolve to. A
-predicate holding a subquery also lists the names of the subquery's select list,
-and the subquery's own `WHERE` is a rule of its own. A compile that is degraded
+subquery's included, with its text (cut at 500 characters, `cut: true` saying
+so) and the columns its names resolve to; a join inside a parenthesised join
+gives none. A `WHERE` or a `HAVING` holding a subquery also lists the names of
+the subquery's select list, and the subquery's own `WHERE` is a rule of its own.
+A compile that is degraded
 but not set aside writes every one of its rules
 ([0050](docs/decisions/0050-a-model-s-rules-and-a-column-s-expression-go-in-the-cache.md)).
 A column read for two reasons still gets one edge per pair, carrying `dedup_key`
@@ -110,11 +112,11 @@ more than cast it, as for a date spine's date, or when the engine read a union
 in part. Under `--indirect` a root gets the row-deciding edges every output
 column gets.
 
-A column an edge calls a `cast`, a `transform`, an `aggregate` or a `window` has
-its expression under `expressions`, whether or not `--indirect` is given: the
+A column whose loudest edge is a `cast`, a `transform`, an `aggregate` or a
+`window` has its expression under `expressions`, whether or not `--indirect` is given: the
 loudest expression on the way back from the column (of two as loud on
-different paths, the greater text), cut at 500 characters (`cut: true` says
-so), and `steps`, how many expressions the longest path met. `steps` stops at
+different paths, the greater text), cut at 500 characters as a rule's text is,
+and `steps`, how many expressions the longest path met. `steps` stops at
 32: a column that reaches it comes through a recursive CTE, which meets its
 expression once more on every lap, and the count is then no path's length.
 A copy, a rename and a hash have none: their edges say it

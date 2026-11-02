@@ -92,8 +92,12 @@ pub struct Rule {
     pub node: String,
     /// `WHERE`, `HAVING`, `QUALIFY` or `JOIN`.
     pub clause: String,
-    /// The predicate with the names it was written with, a CTE's alias included.
+    /// The predicate with the names it was written with, a CTE's alias included,
+    /// cut at 500 characters.
     pub text: String,
+    /// Present only when `text` was cut.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
     /// The relations' columns those names resolve to, as the indirect reads
     /// place them. A name that cannot be placed is not here.
     pub columns: Vec<RuleColumn>,

@@ -197,6 +197,13 @@ order their columns differently, read exactly since 0044, and
 
 ## Residuals already named
 
+- **A join inside a parenthesised join gives no rule** (0050): in `r join (c
+  join o on c.id = o.cid) on r.cid = c.id` the inner `ON` is not read, and the
+  outer rule lists only `raw.cid`, since `c` sits inside the parenthesised join.
+  A limit of the engine's reading of a join, now visible in the rules.
+- **A `JOIN ON` holding a subquery** lists the names it reads at its own level
+  and not those of the subquery's select list (`c.x in (select o.x ...)` leaves
+  out `o.x`), where a `WHERE` and a `HAVING` list both (0050).
 - **The step count in the walk's key** (0050): the state a node is walked in
   includes the expressions met so far, so a node two paths reach with different
   counts is walked again for each. On a synthetic project of 40 CTEs, each level

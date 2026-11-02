@@ -44,16 +44,18 @@ beside the edges that a reader not knowing it skips.
   compile is not set aside: a degraded one writes every rule of its SQL, as it
   writes the indirect edges of the columns its table shares. Every `SELECT`'s
   `WHERE` and `HAVING` is a rule, a subquery's included, one in a select list
-  too. A rule lists the names placed in its own `SELECT`, and for a predicate
-  holding a subquery also the names of the subquery's select list, each in the
-  scope that wrote it; the subquery's own `WHERE` is a rule of its own, with its
+  too. A rule lists the names placed in its own `SELECT`, and for a `WHERE` or
+  a `HAVING` holding a subquery also the names of the subquery's select list,
+  each in the scope that wrote it (a `JOIN ON` holding a subquery does not); the subquery's own `WHERE` is a rule of its own, with its
   own columns. Two rules the same in clause, text and columns are written once;
-  the same text over two relations is two rules. The order is the walk's: the
+  the same text over two relations is two rules. The text is cut at 500
+  characters with `cut: true`, as an expression's is. The order is the walk's: the
   outermost `SELECT` first, then the ones it holds, and inside a `SELECT` its
   joins, `WHERE`, `HAVING` and `QUALIFY`.
 - **An expression is a column's**: one entry for each output column whose
-  direct edges include a cast, a transform, an aggregate or a window. `kind` is
-  the loudest of those edges (0009); `text` is the expression that ranked it,
+  loudest direct edge is a cast, a transform, an aggregate or a window (a column
+  with a hash edge in one union branch and a transform in another has none, the
+  hash being the louder). `kind` is that edge's role (0009); `text` is the expression that ranked it,
   cut at 500 characters with `cut: true`. Of two as loud on different paths the
   greater text stands (0032); along one path the walk holds the outer one. And
   `steps` is the most expressions the walk met on any path back to a relation,
@@ -105,6 +107,12 @@ The count sits in the walk's key, so a node two paths reach with different
 counts is walked for each. On the fixtures that costs nothing measurable, but a
 synthetic shape of many CTEs each reading the one before twice multiplies the
 states; it is a residual in `docs/next-steps.md`, with the fix to try.
+
+Two limits of the engine's reading show in the rules. In `r join (c join o on
+c.id = o.cid) on r.cid = c.id` the inner `ON` gives no rule and the outer lists
+only `raw.cid`, `c` being inside a parenthesised join. And a `JOIN ON` holding a
+subquery does not list the names of the subquery's select list, where a `WHERE`
+and a `HAVING` do. Both are in `docs/next-steps.md`.
 
 The text is the parser's print, not the compiled file's bytes: keywords come out
 in capitals and spacing is normalised, the names as written. A reader wanting
