@@ -33,9 +33,9 @@ Each release carries a binary for macOS on Apple silicon and a static one for
 Linux on x86_64, each with a build provenance GitHub attests:
 
 ```
-curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.10.1/collin-v0.10.1-aarch64-apple-darwin.tar.gz
-gh attestation verify collin-v0.10.1-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
-tar -xzf collin-v0.10.1-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.11.0/collin-v0.11.0-aarch64-apple-darwin.tar.gz
+gh attestation verify collin-v0.11.0-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
+tar -xzf collin-v0.11.0-aarch64-apple-darwin.tar.gz
 ```
 
 The binary is not notarized. Downloaded with `curl` it runs as is; downloaded
@@ -44,7 +44,7 @@ with a browser, macOS refuses it until `xattr -d com.apple.quarantine collin`.
 From source, with Rust 1.82 or later:
 
 ```
-cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.10.1 collin-cli
+cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.11.0 collin-cli
 ```
 
 `collin --version` says which collin it is, and the cache it writes names it
@@ -89,6 +89,15 @@ model list, which stays a list of faults, and says of each whether the model
 also carries it through to an output. `--indirect` also puts them in the cache,
 where they cost one edge per output column, which on the corpus below more than
 doubles the file ([0011](docs/decisions/0011-an-indirect-edge-and-what-it-fans-out-to.md)).
+The predicates themselves come with it, as `rules` beside the edges: one for each
+`WHERE`, `HAVING`, `QUALIFY` and `JOIN` of every `SELECT` of a model, a
+subquery's included, with its text (cut at 500 characters, `cut: true` saying
+so) and the columns its names resolve to; a join inside a parenthesised join
+gives none. A `WHERE` or a `HAVING` holding a subquery also lists the names of
+the subquery's select list, and the subquery's own `WHERE` is a rule of its own.
+A compile that is degraded
+but not set aside writes every one of its rules
+([0050](docs/decisions/0050-a-model-s-rules-and-a-column-s-expression-go-in-the-cache.md)).
 A column read for two reasons still gets one edge per pair, carrying `dedup_key`
 over `join_key` over `filter`, and the report keeps both reasons
 ([0013](docs/decisions/0013-one-edge-when-a-column-plays-two-indirect-roles.md)).
@@ -102,6 +111,23 @@ text is left out unless it is the whole value: when something on the way does
 more than cast it, as for a date spine's date, or when the engine read a union
 in part. Under `--indirect` a root gets the row-deciding edges every output
 column gets.
+
+A column whose loudest edge is a `cast`, a `transform`, an `aggregate` or a
+`window` has its expression under `expressions`, whether or not `--indirect` is given: the
+loudest expression on the way back from the column (of two as loud on
+different paths, the greater text), cut at 500 characters as a rule's text is,
+and `steps`, how many expressions the longest path met. `steps` stops at
+32: a column that reaches it comes through a recursive CTE, which meets its
+expression once more on every lap, and the count is then no path's length.
+A copy, a rename and a hash have none: their edges say it
+([0050](docs/decisions/0050-a-model-s-rules-and-a-column-s-expression-go-in-the-cache.md)).
+
+```json
+"rules": [{"node": "model.shop.orders", "clause": "WHERE", "text": "status <> 'cancelled'",
+           "columns": [{"node": "model.shop.stg_orders", "column": "status"}]}],
+"expressions": [{"node": "model.shop.orders", "column": "amount_eur", "kind": "transform",
+                 "text": "amount * fx.rate", "steps": 2}]
+```
 
 ## The three sources of truth
 

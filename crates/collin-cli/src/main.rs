@@ -35,6 +35,8 @@ OPTIONS
     --indirect        also emit join keys, dedup keys and filter predicates,
                       one edge per output column: on this corpus that more
                       than doubles the cache. The report lists them either way.
+                      The predicates themselves come with it, one rule each,
+                      with the columns their names resolve to.
     -h, --help
     -V, --version     the version, and the commit it was built from
 
@@ -205,6 +207,12 @@ fn main() -> ExitCode {
             println!("    inferred                {}", t.edges_inferred);
             if t.edges_indirect > 0 {
                 println!("    indirect, row choosing  {}", t.edges_indirect);
+            }
+            if t.rules > 0 {
+                println!("    rules, predicates       {}", t.rules);
+            }
+            if t.expressions > 0 {
+                println!("    expressions, computed   {}", t.expressions);
             }
             println!(
                 "    columns covered         {} / {}  {:.1}%",

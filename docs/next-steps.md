@@ -197,6 +197,24 @@ order their columns differently, read exactly since 0044, and
 
 ## Residuals already named
 
+- **A join inside a parenthesised join gives no rule** (0050): in `r join (c
+  join o on c.id = o.cid) on r.cid = c.id` the inner `ON` is not read, and the
+  outer rule lists only `raw.cid`, since `c` sits inside the parenthesised join.
+  A limit of the engine's reading of a join, now visible in the rules.
+- **A `JOIN ON` holding a subquery** lists the names it reads at its own level
+  and not those of the subquery's select list (`c.x in (select o.x ...)` leaves
+  out `o.x`), where a `WHERE` and a `HAVING` list both (0050).
+- **The step count in the walk's key** (0050): the state a node is walked in
+  includes the expressions met so far, so a node two paths reach with different
+  counts is walked again for each. On a synthetic project of 40 CTEs, each level
+  `a_i = a_{i-1} + b_{i-1}` and `b_i = a_{i-1}`, over 30 columns, the states go
+  from 2 430 to 23 340 (about 10 times, `resolve` taking about 40 % longer),
+  and no state is walked more than 33 times, once for each count from 0 to the
+  ceiling of 32. The fixtures do
+  not show it (Shopify with `--indirect`, 0.25 s to 0.26 s). The fix to try: walk
+  on the four-part key as before, record how the states lead to each other, and
+  take the longest path once afterwards. A cycle in that record then means a
+  recursive CTE, and replaces the ceiling of 32.
 - **A quoted outer alias in a subquery** is folded before the engine's
   bare-name lookup (its thirteenth patch): on Snowflake, under
   `FROM t AS "Reviews"`, a subquery reading `reviews` that filters on

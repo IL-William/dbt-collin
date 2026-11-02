@@ -177,6 +177,13 @@ pub struct Totals {
     /// `edges_parsed` because they claim something different: which rows exist,
     /// not what a value is. Zero unless the run asked for them.
     pub edges_indirect: usize,
+    /// Predicates written to the cache as rules (0050): zero unless the run
+    /// asked for the indirect edges, which they come with.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub rules: usize,
+    /// Output columns the cache gives an expression for (0050).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub expressions: usize,
     /// Columns read to decide which rows exist, counted once per model, column
     /// and role rather than once per output column they were fanned out to.
     /// This is the number of facts; `edges_indirect` is what it costs to draw

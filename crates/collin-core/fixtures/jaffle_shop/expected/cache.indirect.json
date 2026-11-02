@@ -73,4 +73,20 @@
 {"from":"model.jaffle_shop.stg_payments","from_col":"order_id","to":"model.jaffle_shop.orders","to_col":"order_date","kind":"join_key"},
 {"from":"model.jaffle_shop.stg_payments","from_col":"order_id","to":"model.jaffle_shop.orders","to_col":"order_id","kind":"join_key"},
 {"from":"model.jaffle_shop.stg_payments","from_col":"order_id","to":"model.jaffle_shop.orders","to_col":"status","kind":"join_key"}
+],"rules":[
+{"node":"model.jaffle_shop.customers","clause":"JOIN","text":"payments.order_id = orders.order_id","columns":[{"node":"model.jaffle_shop.stg_payments","column":"order_id"},{"node":"model.jaffle_shop.stg_orders","column":"order_id"}]},
+{"node":"model.jaffle_shop.customers","clause":"JOIN","text":"customers.customer_id = customer_orders.customer_id","columns":[{"node":"model.jaffle_shop.stg_customers","column":"customer_id"},{"node":"model.jaffle_shop.stg_orders","column":"customer_id"}]},
+{"node":"model.jaffle_shop.customers","clause":"JOIN","text":"customers.customer_id = customer_payments.customer_id","columns":[{"node":"model.jaffle_shop.stg_customers","column":"customer_id"},{"node":"model.jaffle_shop.stg_orders","column":"customer_id"}]},
+{"node":"model.jaffle_shop.orders","clause":"JOIN","text":"orders.order_id = order_payments.order_id","columns":[{"node":"model.jaffle_shop.stg_orders","column":"order_id"},{"node":"model.jaffle_shop.stg_payments","column":"order_id"}]}
+],"expressions":[
+{"node":"model.jaffle_shop.stg_payments","column":"amount","kind":"transform","text":"amount / 100","steps":1},
+{"node":"model.jaffle_shop.customers","column":"customer_lifetime_value","kind":"aggregate","text":"sum(amount)","steps":1},
+{"node":"model.jaffle_shop.customers","column":"first_order","kind":"aggregate","text":"min(order_date)","steps":1},
+{"node":"model.jaffle_shop.customers","column":"most_recent_order","kind":"aggregate","text":"max(order_date)","steps":1},
+{"node":"model.jaffle_shop.customers","column":"number_of_orders","kind":"aggregate","text":"count(order_id)","steps":1},
+{"node":"model.jaffle_shop.orders","column":"amount","kind":"aggregate","text":"sum(amount)","steps":1},
+{"node":"model.jaffle_shop.orders","column":"bank_transfer_amount","kind":"aggregate","text":"sum(CASE WHEN payment_method = 'bank_transfer' THEN amount ELSE 0 END)","steps":1},
+{"node":"model.jaffle_shop.orders","column":"coupon_amount","kind":"aggregate","text":"sum(CASE WHEN payment_method = 'coupon' THEN amount ELSE 0 END)","steps":1},
+{"node":"model.jaffle_shop.orders","column":"credit_card_amount","kind":"aggregate","text":"sum(CASE WHEN payment_method = 'credit_card' THEN amount ELSE 0 END)","steps":1},
+{"node":"model.jaffle_shop.orders","column":"gift_card_amount","kind":"aggregate","text":"sum(CASE WHEN payment_method = 'gift_card' THEN amount ELSE 0 END)","steps":1}
 ]}

@@ -190,6 +190,7 @@ fn describe(seen: &Seen) -> Value {
                 "from_col": e.from_column,
                 "to_col": e.to_column,
                 "expression": e.expression,
+                "steps": e.steps,
             })
         })
         .collect();
@@ -244,6 +245,8 @@ fn describe(seen: &Seen) -> Value {
         "published": seen.published,
         "published_indirect": seen.published_indirect,
         "published_roots": seen.published_roots,
+        "published_rules": seen.published_rules,
+        "published_expressions": seen.published_expressions,
     })
 }
 
