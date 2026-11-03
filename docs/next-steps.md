@@ -245,10 +245,10 @@ order their columns differently, read exactly since 0044, and
   unaliased derived table, or a bare name several sources have, is read as
   before 0041, against the source the engine hung the window off: 3 of the 29
   window and ordered aggregate expressions here, none of them wrong.
-- **Link tests on Unix only**: CI runs on Ubuntu, so the `cfg(unix)` tests of
-  0048 run there and nothing exercises the Windows paths.
-- **Replacing an output on Windows** (a rename over an existing file or a link)
-  is never run in CI (0048).
+- **Link tests on Unix only**: the `cfg(unix)` tests of 0048 do not run on
+  Windows. The rest of the suite does, on `windows-latest`, in the release
+  workflow on every bump pull request and release, replacing an output
+  included (`it_creates_the_folders_and_replaces_the_file`).
 - **The check and the read are two steps**: a compiled file or a seed swapped
   for a link in between is still read; it needs a writer in the project while
   collin runs (0048).

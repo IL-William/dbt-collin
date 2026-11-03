@@ -1,17 +1,19 @@
 name: release
 
 # A version in Cargo.toml with no tag yet is released from main: collin is built
-# for each target, every archive's provenance is attested, and the tag and the
-# release are created together at the commit that was built (0035). The notes
-# list the pull requests merged since the previous release.
+# for each target (macOS on Apple silicon, Linux and Windows on x86_64), every
+# archive's provenance is attested, and the tag and the release are created
+# together at the commit that was built (0035). The notes list the pull
+# requests merged since the previous release.
 #
 # The tag is made here rather than pushed by hand: a tag pushed with this
 # workflow's token would start no workflow, and one pushed by hand is a step
 # that gets forgotten.
 #
-# A pull request that touches this file runs the same builds without
-# publishing: tags here cannot be moved or deleted, so a broken release has to
-# be found before its tag exists.
+# A pull request that touches this file or Cargo.toml runs the same builds
+# without publishing: tags here cannot be moved or deleted, so a broken release,
+# a Windows-only one included, has to be found before the bump merges and its
+# tag exists.
 on:
   push:
     branches: [main]
@@ -19,7 +21,7 @@ on:
     # failed for a reason fixed here.
     paths: [Cargo.toml, .github/workflows/release.yml]
   pull_request:
-    paths: [".github/workflows/release.yml"]
+    paths: [Cargo.toml, ".github/workflows/release.yml"]
   # A release that failed on something outside this repository, retried on
   # main as it is.
   workflow_dispatch:
@@ -70,10 +72,24 @@ jobs:
             os: macos-latest
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
+          # psm, under sqlparser, compiles C, and a Windows machine with no
+          # build tools cannot `cargo install` collin: this runner has MSVC.
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
     runs-on: ${{ matrix.os }}
     env:
       TARGET: ${{ matrix.target }}
+    defaults:
+      run:
+        # Windows defaults to pwsh, where "$TARGET" is not the variable.
+        shell: bash
     steps:
+      # The Windows leg tests and packages the same LF files as the other
+      # targets, README and LICENSE in the archive included. It runs before the
+      # checkout so the repository and its submodule both come out that way.
+      # Reading a CRLF project is covered by unit tests.
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -92,7 +108,6 @@ jobs:
       - run: cargo test --locked --release --target "$TARGET"
       - run: cargo build --locked --release --target "$TARGET" -p collin-cli
       - name: Package
-        shell: bash
         env:
           DUE: ${{ needs.version.outputs.due }}
           VERSION: ${{ needs.version.outputs.version }}
@@ -100,12 +115,23 @@ jobs:
           if [ "$DUE" = true ]; then version=v$VERSION; else version=check; fi
           dir="collin-$version-$TARGET"
           mkdir "$dir"
-          cp "target/$TARGET/release/collin" LICENSE README.md "$dir/"
-          tar -czf "$dir.tar.gz" "$dir"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp "target/$TARGET/release/collin.exe" LICENSE README.md "$dir/"
+            # Compress-Archive is on the image, so the zip needs no extra tool.
+            # pwsh rather than Windows PowerShell 5.1, whose zips use
+            # backslashes in entry names. It reads dir from the environment.
+            export dir
+            pwsh -NoProfile -Command 'Compress-Archive -Path $env:dir -DestinationPath ($env:dir + ".zip")'
+          else
+            cp "target/$TARGET/release/collin" LICENSE README.md "$dir/"
+            tar -czf "$dir.tar.gz" "$dir"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.target }}
-          path: collin-*.tar.gz
+          path: |
+            collin-*.tar.gz
+            collin-*.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -126,18 +152,18 @@ jobs:
           merge-multiple: true
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: dist/collin-*
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ needs.version.outputs.version }}
         run: |
           cd dist
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum collin-* > SHA256SUMS
           # The tag is created with the release, at the commit that was built.
           # The notes are GitHub's list of what was merged since the last
           # release, not the message of whichever commit started this run: a
           # retry or a fix to this file would otherwise describe itself.
-          gh release create "$TAG" *.tar.gz SHA256SUMS \
+          gh release create "$TAG" collin-* SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "collin $TAG" --generate-notes

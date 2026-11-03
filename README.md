@@ -29,22 +29,38 @@ target directory does. `collin --help` lists the rest.
 
 ## Install
 
-Each release carries a binary for macOS on Apple silicon and a static one for
-Linux on x86_64, each with a build provenance GitHub attests:
+Each release carries a binary for macOS on Apple silicon, a static one for
+Linux on x86_64 and one for Windows on x86_64, each with a build provenance
+GitHub attests:
 
 ```
-curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.11.0/collin-v0.11.0-aarch64-apple-darwin.tar.gz
-gh attestation verify collin-v0.11.0-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
-tar -xzf collin-v0.11.0-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.11.1/collin-v0.11.1-aarch64-apple-darwin.tar.gz
+gh attestation verify collin-v0.11.1-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
+tar -xzf collin-v0.11.1-aarch64-apple-darwin.tar.gz
 ```
 
 The binary is not notarized. Downloaded with `curl` it runs as is; downloaded
 with a browser, macOS refuses it until `xattr -d com.apple.quarantine collin`.
 
+On Windows, from Git Bash:
+
+```
+curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.11.1/collin-v0.11.1-x86_64-pc-windows-msvc.zip
+gh attestation verify collin-v0.11.1-x86_64-pc-windows-msvc.zip --repo IL-William/dbt-collin
+unzip collin-v0.11.1-x86_64-pc-windows-msvc.zip
+```
+
+`collin.exe` is not signed. Downloaded with `curl` in Git Bash it runs as is;
+downloaded with a browser, Windows may hold it until "Unblock" is ticked in
+its Properties.
+
+Put `collin.exe` on the `PATH`, or beside `dbt-edith.exe`. This needs no C
+compiler, which `cargo install` does.
+
 From source, with Rust 1.82 or later:
 
 ```
-cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.11.0 collin-cli
+cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.11.1 collin-cli
 ```
 
 `collin --version` says which collin it is, and the cache it writes names it
