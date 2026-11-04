@@ -73,4 +73,4 @@ compile for 100 and from the warehouse for 87.
 
 A column that keeps one input and loses another is not named: it has an edge,
 and nothing here compares the inputs an expression reads with the edges it got.
-The README says so.
+The README says so. 0051 names it, as `partial`.

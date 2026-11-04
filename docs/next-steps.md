@@ -176,7 +176,7 @@ warehouse to confirmed. The 680 columns still without an edge, by first cause:
 | --- | --- | --- |
 | 447 | Lost, a name unresolved: led by a STRUCT's field, `metadata.extract_ts`, read as a column of a table named `metadata` | The engine |
 | 108 | Lost at a column the engine gives no source: all but a handful in models that `UNNEST` or `PIVOT` | The engine |
-| 70 | Lost, a name the walk never reached | Not read yet |
+| 70 | Lost, a name the walk never reached: none of its edges survived. Some of the same names, in a column that kept another edge, are named since 0051 as `partial`, where the walk gives up at one of its sites | Not read yet |
 | 51 | Settled column by column: the warehouse contradicts the compile | Not read yet |
 | 4 | A compile that does not parse | |
 
@@ -197,6 +197,12 @@ order their columns differently, read exactly since 0044, and
 
 ## Residuals already named
 
+- **The lineage-library observer does not read `partial`** (0051): its lines
+  are edges, roots and lost columns. None of its 221 facts raises an entry
+  today, so `partial` lines would move nothing; they are left out so that the
+  known file is not regenerated with this change, and wait for a shape the
+  library holds that the pass names. The regeneration is a pull request to
+  lineage-library and one here.
 - **A join inside a parenthesised join gives no rule** (0050): in `r join (c
   join o on c.id = o.cid) on r.cid = c.id` the inner `ON` is not read, and the
   outer rule lists only `raw.cid`, since `c` sits inside the parenthesised join.

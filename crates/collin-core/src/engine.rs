@@ -196,6 +196,11 @@ pub struct Resolved {
     pub merged_scopes: Vec<MergedScope>,
     /// Names read from a CTE that does not project them. See `UnbackedRead`.
     pub unbacked: Vec<UnbackedRead>,
+    /// Output columns that have an edge and are not fully traced: a qualified
+    /// name their expression reads that the walk gave up on, or a chain of
+    /// expressions cut at `MAX_STEPS`, each with why. See `Partial`.
+    /// Sorted by output, reason and name.
+    pub partial: Vec<Partial>,
     /// Every column the engine said the list it was handed for a relation
     /// lacks, from its `UNKNOWN_COLUMN`, in the order raised.
     pub unknown_columns: Vec<UnknownColumn>,
@@ -319,6 +324,72 @@ pub enum DeadEnd {
     NamesUnreached { names: Vec<String> },
     /// Anything else the engine left unplaced.
     Unresolved,
+}
+
+/// A name an output column's expression reads that the walk gave up on, or a
+/// chain of expressions longer than the count holds, in a column that has an
+/// edge all the same (0051).
+///
+/// A column with no edge at all is `Lost`, and not here: this list is for the
+/// column a reader would take for complete because it has lineage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Partial {
+    pub output: String,
+    /// Lower case. For `steps_capped` the column the walk was entering when the
+    /// count stopped, which is no name that went missing.
+    pub name: String,
+    pub reason: Reason,
+}
+
+/// Why a column with an edge is not fully traced. Each is a place in the main
+/// walk that used to say nothing, and that now knows the output column it was
+/// walking for. Four are a name dropped; `StepsCapped` drops nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Reason {
+    /// An expression the engine hung off a relation reads a name the relation's
+    /// column list does not have.
+    NameUnresolved,
+    /// The same, off a relation that was handed over with no list at all.
+    RelationUnknown,
+    /// A scope reads a name from a CTE that does not project it: the
+    /// `UnbackedRead`, written beside it.
+    CteLacksName,
+    /// A window's partition or ordering key, qualified, whose qualifier binds a
+    /// source that lacks the column; or a name the fallback that goes by the
+    /// window's text read and no column of its scope has.
+    WindowKeyUnbound,
+    /// The count of expressions reached `MAX_STEPS` and an expression met after
+    /// it was not counted. The edges are all there: the chain of expressions
+    /// that computes the column is longer than the cache's `steps` says.
+    StepsCapped,
+}
+
+impl Reason {
+    /// As the cache and the report write it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reason::NameUnresolved => "name_unresolved",
+            Reason::RelationUnknown => "relation_unknown",
+            Reason::CteLacksName => "cte_lacks_name",
+            Reason::WindowKeyUnbound => "window_key_unbound",
+            Reason::StepsCapped => "steps_capped",
+        }
+    }
+}
+
+/// What a give-up site of the walk saw, kept until the edges of the whole walk
+/// are known, which is what says whether a name was lost.
+struct Pending {
+    output: String,
+    reason: Reason,
+    /// Lower case. The names a qualified read or key left unbound, or the one
+    /// name the site gives (`cte_lacks_name`, `steps_capped`).
+    names: Vec<String>,
+    /// A name the column got an edge for through another relation of its scope
+    /// is not lost, whatever the text hung off one relation says. Not so for a
+    /// `cte_lacks_name`, which is the SQL reading what its CTE does not have,
+    /// nor for `steps_capped`, which is about a count.
+    weigh: bool,
 }
 
 /// The derived table aliases and CTE names of one statement, as written, and
@@ -2034,6 +2105,125 @@ fn qualified_tails(expr: &str) -> Vec<String> {
     out
 }
 
+/// The names `expr` reads that can be claimed as columns of a relation: the
+/// column part of a two-part qualified name, `o.amount`, and nothing else.
+///
+/// A bare word is never one, whatever the statement holds by that name: a
+/// keyword, a date part, a type and a lateral alias are all bare words. Nor is
+/// a part of a longer path, which could be a struct's field or a variant's key
+/// (`t.rec.field`, `a.payload:customer.ts`), nor a qualifier that is a column of
+/// some relation, which makes the name a field of it. Silence over a guess: a
+/// name this passes over is a name not claimed, never one claimed wrongly.
+///
+/// A nested query is skipped whole: its names belong to its own scope, and a
+/// correlated predicate reads the columns of tables this text knows nothing of.
+/// A qualifier that is a lambda parameter (`e -> e.v > 0`) is no relation.
+fn claimable_tails(expr: &str, columns: &HashSet<String>, tables: &HashSet<String>) -> Vec<String> {
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    let bytes = expr.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    // The parameters of every lambda in the text: a single name, or a list in
+    // parentheses, before an arrow.
+    let mut lambda: HashSet<String> = HashSet::new();
+    let mut at = 0;
+    while let Some(arrow) = expr[at..].find("->").map(|n| n + at) {
+        let mut end = arrow;
+        while end > 0 && (bytes[end - 1] as char).is_whitespace() {
+            end -= 1;
+        }
+        let start = if end > 0 && bytes[end - 1] == b')' {
+            expr[..end].rfind('(').map_or(end, |n| n + 1)
+        } else {
+            let mut from = end;
+            while from > 0 && ident(bytes[from - 1]) {
+                from -= 1;
+            }
+            from
+        };
+        lambda.extend(
+            expr[start..end]
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+                .filter(|w| !w.is_empty())
+                .map(str::to_lowercase),
+        );
+        at = arrow + 2;
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\'' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'\'' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'(' => {
+                let rest = expr[i + 1..].trim_start();
+                let word: String = rest.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+                if matches!(word.to_ascii_lowercase().as_str(), "select" | "with")
+                    && !rest[word.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                {
+                    // To the matching parenthesis, a literal holding one not counted.
+                    let mut depth = 0usize;
+                    while i < bytes.len() {
+                        match bytes[i] {
+                            b'\'' => {
+                                i += 1;
+                                while i < bytes.len() && bytes[i] != b'\'' {
+                                    i += 1;
+                                }
+                            }
+                            b'(' => depth += 1,
+                            b')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                }
+                i += 1;
+            }
+            b'.' if i > 0 && ident(bytes[i - 1]) => {
+                let mut from = i;
+                while from > 0 && ident(bytes[from - 1]) {
+                    from -= 1;
+                }
+                let qualifier = expr[from..i].to_lowercase();
+                let chained = from > 0 && matches!(bytes[from - 1], b'.' | b':' | b']' | b'"');
+                let start = i + 1;
+                let mut end = start;
+                while end < bytes.len() && ident(bytes[end]) {
+                    end += 1;
+                }
+                if !chained
+                    && !bytes[from].is_ascii_digit()
+                    && !columns.contains(&qualifier)
+                    && !lambda.contains(&qualifier)
+                    && end > start
+                    && !bytes[start].is_ascii_digit()
+                {
+                    let mut k = end;
+                    while k < bytes.len() && (bytes[k] as char).is_whitespace() {
+                        k += 1;
+                    }
+                    let name = expr[start..end].to_lowercase();
+                    if !matches!(bytes.get(k), Some(b'(') | Some(b'.')) && !tables.contains(&name) && !out.contains(&name) {
+                        out.push(name);
+                    }
+                }
+                i = end.max(i + 1);
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
 /// Adds `edge` unless its column pair has one already. Then the louder of the
 /// two expressions stands (0009), and of two as loud the greater text, so that
 /// neither the role nor the text depends on which path the walk took first:
@@ -2175,6 +2365,17 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         })
         .collect();
 
+    // Every column name some relation has, and every relation's last name part:
+    // what a qualified read is weighed against to be claimed as a column (0051).
+    let anywhere: HashSet<String> = known.values().flatten().cloned().collect();
+    let tables: HashSet<String> = out
+        .reads
+        .iter()
+        .chain(known.keys())
+        .filter_map(|r| r.rsplit('.').next())
+        .map(str::to_lowercase)
+        .collect();
+
     // Ownership tells which table, CTE or output a column hangs off, and the
     // inverse says which columns a CTE has, which is how a derivation hung off
     // the CTE itself is followed rather than abandoned.
@@ -2215,6 +2416,14 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     // `put_edge`.
     let mut seen_edge: HashMap<(String, String, String), usize> = HashMap::new();
     let mut seen_unbacked: HashSet<(String, String, String)> = HashSet::new();
+    // Where the walk gave up, with the column it was walking for. Whether a name
+    // was lost is weighed after it, once the edges of every column are known
+    // (0051).
+    let mut pending: Vec<Pending> = Vec::new();
+    // For a column that gave up somewhere, every column node its walk popped: a
+    // name another relation of the scope gave an edge for is not lost, whatever
+    // the text hung off one relation says.
+    let mut reached: HashMap<String, HashSet<&str>> = HashMap::new();
     // The text behind each output column, kept to tell a root from a loss once
     // the walk is done, and the nodes behind it, to walk again for that.
     let mut expr_of: HashMap<String, String> = HashMap::new();
@@ -2239,13 +2448,16 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     for o in &orderings {
         by_text.entry(o.text.as_str()).or_default().push(o);
     }
-    let ordered = |id: &str, text: &str| -> Option<(Vec<OrderingKey<'_>>, &str)> {
+    // The third is the keys no source gave a column for, which are no edge and
+    // are said (0051).
+    let ordered = |id: &str, text: &str| -> Option<(Vec<OrderingKey<'_>>, &str, Vec<String>)> {
         let scope = match by_id.get(owner.get(id)?)? {
             n if n.node_type == NodeType::Output => None,
             n if n.node_type == NodeType::Cte => Some(n.label.trim_matches(&QUOTES[..]).to_lowercase()),
             _ => return None,
         };
         let mut found: Option<(Vec<OrderingKey<'_>>, &str)> = None;
+        let mut unbound: Vec<String> = Vec::new();
         for o in by_text.get(text)?.iter().filter(|o| o.scope == scope) {
             let mut keys: Vec<OrderingKey<'_>> = Vec::new();
             for (qualifier, name) in &o.keys {
@@ -2280,6 +2492,13 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                 if (qualifier.is_some() && !bound) || owners.len() > 1 {
                     return None;
                 }
+                // Said only for a qualified key whose qualifier binds a source
+                // that lacks the column. A bare key is a column, a lateral
+                // alias or an argument (`day` in `dateadd(day, ...)`), and
+                // nothing here tells which.
+                if owners.is_empty() && qualifier.is_some() && bound {
+                    unbound.push(name.clone());
+                }
                 keys.extend(owners);
             }
             keys.sort();
@@ -2292,7 +2511,9 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                 _ => found = Some((keys, o.unordered.as_str())),
             }
         }
-        found
+        unbound.sort();
+        unbound.dedup();
+        found.map(|(keys, unordered)| (keys, unordered, unbound))
     };
     for col in res.nodes.iter().filter(|n| n.node_type == NodeType::Column) {
         let Some(own) = owner.get(&*col.id) else { continue };
@@ -2332,6 +2553,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         // texts are the engine's and the count stops at `MAX_STEPS`: a recursive
         // CTE ends by that ceiling, one more lap giving a new state until then.
         let mut visited: HashSet<(&str, bool, Option<&str>, Option<&str>, u32)> = HashSet::new();
+        let gave_up_before = pending.len();
         while let Some((id, derived, expr, reading, steps)) = stack.pop() {
             if !visited.insert((id, derived, expr, reading, steps)) {
                 continue;
@@ -2343,7 +2565,8 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                     if let Some(rel) = owning_relation(node) {
                         let text = expr.unwrap_or_default();
                         let empty = HashSet::new();
-                        let names = columns_named_in(reading.unwrap_or_default(), known.get(&rel).unwrap_or(&empty));
+                        let list = known.get(&rel);
+                        let names = columns_named_in(reading.unwrap_or_default(), list.unwrap_or(&empty));
                         for from_column in names {
                             put_edge(
                                 &mut out.edges,
@@ -2356,6 +2579,20 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                     steps,
                                 },
                             );
+                        }
+                        // The names the list has are edges now; a qualified name
+                        // it lacks is lost, unless another relation gave it.
+                        let lost: Vec<String> = claimable_tails(reading.unwrap_or_default(), &anywhere, &tables)
+                            .into_iter()
+                            .filter(|n| !list.is_some_and(|l| l.contains(n)))
+                            .collect();
+                        if !lost.is_empty() {
+                            pending.push(Pending {
+                                output: to_column.clone(),
+                                reason: if list.is_some() { Reason::NameUnresolved } else { Reason::RelationUnknown },
+                                names: lost,
+                                weigh: true,
+                            });
                         }
                     }
                     continue;
@@ -2450,6 +2687,12 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                             continue;
                         }
                         if seen_unbacked.insert((to_column.clone(), cte.clone(), column.clone())) {
+                            pending.push(Pending {
+                                output: to_column.clone(),
+                                reason: Reason::CteLacksName,
+                                names: vec![column.clone()],
+                                weigh: false,
+                            });
                             let output = to_column.clone();
                             out.unbacked.push(UnbackedRead { output, cte, column, owners });
                         }
@@ -2482,12 +2725,34 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                     // none, and a derivation hung off a CTE was counted at the
                     // hop that led there.
                     let steps = if edge_expr.is_some_and(|e| !e.trim().is_empty()) {
+                        if steps >= MAX_STEPS {
+                            // Another expression the count no longer holds. Nothing
+                            // is dropped: the edges are all there. The column it
+                            // is entering is what a reader can look for; which
+                            // lap it is, nobody can say.
+                            if let Some(n) = by_id.get(*from).filter(|n| n.node_type == NodeType::Column) {
+                                pending.push(Pending {
+                                    output: to_column.clone(),
+                                    reason: Reason::StepsCapped,
+                                    names: vec![n.label.to_lowercase()],
+                                    weigh: false,
+                                });
+                            }
+                        }
                         (steps + 1).min(MAX_STEPS)
                     } else {
                         steps
                     };
                     let keys = edge_expr.and_then(|own| ordered(id, own));
-                    if let Some((keys, _)) = &keys {
+                    if let Some((keys, _, unbound)) = &keys {
+                        if !unbound.is_empty() {
+                            pending.push(Pending {
+                                output: to_column.clone(),
+                                reason: Reason::WindowKeyUnbound,
+                                names: unbound.clone(),
+                                weigh: true,
+                            });
+                        }
                         for key in keys {
                             match key {
                                 OrderingKey::Edge(rel, from_column) => put_edge(
@@ -2511,7 +2776,8 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                             if scope.1.node_type.is_table_or_view() {
                                 let Some(rel) = owning_relation(scope.1) else { continue };
                                 let empty = HashSet::new();
-                                for from_column in columns_named_in(body, known.get(&rel).unwrap_or(&empty)) {
+                                let list = known.get(&rel);
+                                for from_column in columns_named_in(body, list.unwrap_or(&empty)) {
                                     put_edge(
                                         &mut out.edges,
                                         &mut seen_edge,
@@ -2523,6 +2789,18 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                             steps,
                                         },
                                     );
+                                }
+                                let lost: Vec<String> = claimable_tails(body, &anywhere, &tables)
+                                    .into_iter()
+                                    .filter(|n| !list.is_some_and(|l| l.contains(n)))
+                                    .collect();
+                                if !lost.is_empty() {
+                                    pending.push(Pending {
+                                        output: to_column.clone(),
+                                        reason: if list.is_some() { Reason::WindowKeyUnbound } else { Reason::RelationUnknown },
+                                        names: lost,
+                                        weigh: true,
+                                    });
                                 }
                             } else if scope.1.node_type == NodeType::Cte {
                                 let labels: HashMap<String, &str> = owned
@@ -2537,14 +2815,34 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                         stack.push((next, true, text, Some(own), steps));
                                     }
                                 }
+                                let lost: Vec<String> = claimable_tails(body, &anywhere, &tables)
+                                    .into_iter()
+                                    .filter(|n| !names.contains(n))
+                                    .collect();
+                                if !lost.is_empty() {
+                                    pending.push(Pending {
+                                        output: to_column.clone(),
+                                        reason: Reason::WindowKeyUnbound,
+                                        names: lost,
+                                        weigh: true,
+                                    });
+                                }
                             }
                         }
                     }
                     let reading = match keys {
-                        Some((_, unordered)) => Some(unordered),
+                        Some((_, unordered, _)) => Some(unordered),
                         None => edge_expr.or(reading),
                     };
                     stack.push((from, carried, text, reading, steps));
+                }
+            }
+        }
+        if pending.len() > gave_up_before {
+            let ids = reached.entry(to_column.clone()).or_default();
+            for (id, ..) in &visited {
+                if by_id.get(id).is_some_and(|n| n.node_type == NodeType::Column) {
+                    ids.insert(*id);
                 }
             }
         }
@@ -2762,7 +3060,6 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     // CTE and copied out by name or through `select *` shows nothing at the
     // output and everything at the far end. See `Ends`.
     let fed: HashSet<&str> = out.edges.iter().map(|e| e.to_column.as_str()).collect();
-    let anywhere: HashSet<String> = known.values().flatten().cloned().collect();
     // Every name that could be a column here, so that the guard in `Ends` sees a
     // read whatever the engine made of it. The text under an unresolved reference
     // and the column an unknown one names are in, so that a name the engine
@@ -2786,13 +3083,31 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
             );
         }
     }
-    let tables: HashSet<String> = out
-        .reads
-        .iter()
-        .chain(known.keys())
-        .filter_map(|r| r.rsplit('.').next())
-        .map(str::to_lowercase)
-        .collect();
+    // What the walk gave up on, now that the edges of every column are known
+    // (0051). Only a column with an edge: one without is `lost`.
+    if !pending.is_empty() {
+        let mut edge_columns: HashMap<&str, HashSet<&str>> = HashMap::new();
+        for e in &out.edges {
+            edge_columns.entry(e.to_column.as_str()).or_default().insert(e.from_column.as_str());
+        }
+        let mut once: HashSet<(String, Reason, String)> = HashSet::new();
+        for p in pending.iter().filter(|p| fed.contains(p.output.as_str())) {
+            // Another relation of the scope gave an edge for this name, and the
+            // text hung off one relation can read the columns of the next.
+            let got_elsewhere = |name: &String| {
+                reached.get(&p.output).is_some_and(|ids| {
+                    ids.iter().any(|id| by_id.get(id).is_some_and(|n| n.label.eq_ignore_ascii_case(name)))
+                }) || edge_columns.get(p.output.as_str()).is_some_and(|c| c.contains(name.as_str()))
+            };
+            let names = p.names.iter().filter(|n| !(p.weigh && got_elsewhere(n)));
+            for name in names {
+                if once.insert((p.output.clone(), p.reason, name.clone())) {
+                    out.partial.push(Partial { output: p.output.clone(), name: name.clone(), reason: p.reason });
+                }
+            }
+        }
+        out.partial.sort_by(|a, b| (&a.output, a.reason.as_str(), &a.name).cmp(&(&b.output, b.reason.as_str(), &b.name)));
+    }
     let graph = Graph {
         by_id: &by_id,
         owner: &owner,
@@ -4524,5 +4839,312 @@ mod tests {
         // A keyword is never taken for a column.
         assert!(columns_named_in("case when x then y end", &HashSet::from(["end".to_string()]))
             .is_empty());
+    }
+
+    fn partial_of(r: &Resolved) -> Vec<(&str, &str, &str)> {
+        r.partial.iter().map(|p| (p.output.as_str(), p.reason.as_str(), p.name.as_str())).collect()
+    }
+
+    fn a_and_b() -> Vec<Visible> {
+        vec![vis("DB.S.A", &["id", "x"]), vis("DB.S.B", &["id", "w"])]
+    }
+
+    #[test]
+    fn a_window_key_no_column_has_is_named_in_a_column_that_keeps_its_edge() {
+        // The engine hangs the whole window off the table and the key that is
+        // not a column of it dropped without a word (0051).
+        let r = resolve(
+            "select row_number() over (partition by a.x order by a.nope) as z from db.s.a a",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        let from: Vec<&str> = r.edges.iter().map(|e| e.from_column.as_str()).collect();
+        assert_eq!(from, vec!["x"]);
+        assert_eq!(partial_of(&r), vec![("z", "window_key_unbound", "nope")]);
+        // Through a CTE the key is bound in the `SELECT` that writes it, the same way.
+        let r = resolve(
+            "with c as (select id, x from db.s.a) \
+             select c.x + row_number() over (partition by c.id order by c.nope) as z from c",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert_eq!(partial_of(&r), vec![("z", "window_key_unbound", "nope")]);
+    }
+
+    #[test]
+    fn a_window_key_the_text_fallback_finds_no_column_for_is_unbound() {
+        // `b` has no list, so the keys cannot be bound; the text is read against
+        // `a`, whose list lacks `w`.
+        let r = resolve(
+            "select row_number() over (partition by a.id order by b.w) + a.x as z \
+             from db.s.a a join db.s.b b on a.id = b.id",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert_eq!(partial_of(&r), vec![("z", "window_key_unbound", "w")]);
+    }
+
+    #[test]
+    fn a_name_the_relation_the_text_hangs_off_lacks_is_unresolved() {
+        // `id` is in both, so the keys cannot be bound and the text is read
+        // against the relation it hangs off, which has no `w`: `b` has it.
+        let r = resolve(
+            "select row_number() over (partition by id order by b.w) as z \
+             from db.s.a a join db.s.b b on a.id = b.id",
+            "snowflake",
+            &a_and_b(),
+        );
+        let from: Vec<(&str, &str)> = r.edges.iter().map(|e| (e.from_relation.as_str(), e.from_column.as_str())).collect();
+        assert_eq!(from, vec![("DB.S.A", "id")]);
+        assert_eq!(partial_of(&r), vec![("z", "name_unresolved", "w")]);
+    }
+
+    #[test]
+    fn a_name_read_through_a_relation_with_no_list_is_unknown() {
+        // `b` came with no columns: the engine still reads `b.y`, and the key
+        // of the window it cannot bind to anything.
+        let r = resolve(
+            "select a.x + b.y + row_number() over (partition by a.id order by b.w) as z \
+             from db.s.a a join db.s.b b on a.id = b.id",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert!(r.edges.iter().any(|e| e.from_column == "x"));
+        // Once for the relation with no list that the text is read against, once
+        // for the key, which the relation with a list lacks: each is true of its
+        // own relation and they are not merged.
+        assert_eq!(partial_of(&r), vec![("z", "relation_unknown", "w"), ("z", "window_key_unbound", "w")]);
+    }
+
+    #[test]
+    fn a_name_its_cte_lacks_is_named_beside_the_unbacked_read() {
+        let r = resolve(
+            "with c as (select id from db.s.a) select c.id + c.nope as z from c",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert_eq!(r.edges.iter().map(|e| e.from_column.as_str()).collect::<Vec<_>>(), vec!["id"]);
+        assert_eq!(unbacked_of(&r), vec![("z", "c", "nope", vec![])]);
+        assert_eq!(partial_of(&r), vec![("z", "cte_lacks_name", "nope")]);
+    }
+
+    #[test]
+    fn a_window_key_a_cte_scope_lacks_is_unbound_by_the_text_fallback() {
+        // `id` is in both CTEs, so the keys of the window cannot be told apart
+        // and its text is read against the CTE it hangs off.
+        let r = resolve(
+            "with c as (select id, x from db.s.a), d as (select id, y from db.s.a) \
+             select row_number() over (partition by id order by c.nope) + c.x as z \
+             from c join d on c.id = d.id",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert_eq!(partial_of(&r), vec![("z", "window_key_unbound", "nope")]);
+    }
+
+    #[test]
+    fn a_recursive_column_past_the_ceiling_is_named_by_the_column_it_enters() {
+        let r = resolve(
+            "with recursive t as (select id as n from db.s.a union all select n + 1 from t where n < 5) select n from t",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert_eq!(r.edges.iter().map(|e| e.steps).collect::<Vec<_>>(), vec![MAX_STEPS]);
+        assert_eq!(partial_of(&r), vec![("n", "steps_capped", "n")]);
+    }
+
+    #[test]
+    fn a_fully_traced_column_and_a_column_with_no_edge_have_no_entry() {
+        let r = resolve("select a.x + a.id as z, a.x as k from db.s.a a", "snowflake", &[vis("DB.S.A", &["id", "x"])]);
+        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        // No edge at all is `lost`, and the unbacked reads of its CTE are
+        // named in the report, not here.
+        let r = resolve(
+            "with f as (select cast('x' as text) as src from db.s.p), \
+             n as (select src, coalesce(c, 'n/a') as c, coalesce(nullif(trim(d), ''), 'n/a') as d from f) \
+             select * from n",
+            "snowflake",
+            &p_table(),
+        );
+        assert!(!r.unbacked.is_empty() && r.edges.is_empty());
+        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+    }
+
+    #[test]
+    fn a_name_another_relation_gave_an_edge_for_is_not_lost() {
+        // The window's text hangs off `a`, which has no `w`; `b.w` is read by
+        // the column and has its edge.
+        let r = resolve(
+            "select row_number() over (partition by id order by b.w) + a.x + b.w as z \
+             from db.s.a a join db.s.b b on a.id = b.id",
+            "snowflake",
+            &a_and_b(),
+        );
+        assert!(r.edges.iter().any(|e| e.from_relation == "DB.S.B" && e.from_column == "w"));
+        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+    }
+
+    /// `a` has columns named after the date parts and the type that the SQL
+    /// below spells, and an output is aliased `date` or `last`: a bare word is
+    /// never claimed, whatever the statement holds by that name.
+    fn dated() -> Vec<Visible> {
+        vec![vis("DB.S.A", &["id", "x", "day", "month", "date", "last"]), vis("DB.S.B", &["id", "w"])]
+    }
+
+    #[test]
+    fn a_date_part_a_type_and_a_keyword_are_never_claimed() {
+        let from = "from db.s.a a join db.s.b b on a.id = b.id";
+        // The key is read in its own `SELECT` and the text is read against `a`:
+        // `w` is `b`'s and is named, the words around it are not.
+        for key in [
+            "dateadd(day, 1, b.w)",
+            "datediff(day, b.w, b.id)",
+            "date_trunc(month, b.w)",
+            "b.w::date",
+            "b.w nulls last",
+        ] {
+            let r = resolve(
+                &format!("select a.x::date as date, a.x as last, row_number() over (partition by id order by {key}) as z {from}"),
+                "snowflake",
+                &dated(),
+            );
+            assert_eq!(partial_of(&r), vec![("z", "name_unresolved", "w")], "{key}");
+        }
+        // Bound to `a`, where the keys are read, nothing is left to name.
+        for key in ["dateadd(day, 1, a.x)", "datediff(day, a.x, a.id)", "date_trunc(month, a.x)", "a.x::date", "a.x nulls last"] {
+            let r = resolve(
+                &format!("select a.x::date as date, row_number() over (partition by a.id order by {key}) as z from db.s.a a"),
+                "snowflake",
+                &dated(),
+            );
+            assert!(r.partial.is_empty(), "{key}: {:?}", partial_of(&r));
+        }
+        // And without a column of those names anywhere.
+        for expr in ["dateadd(day, 1, a.x)", "a.x::date"] {
+            let r = resolve(&format!("select {expr} as z from db.s.a a"), "snowflake", &[vis("DB.S.A", &["id", "x"])]);
+            assert!(r.partial.is_empty(), "{expr}: {:?}", partial_of(&r));
+        }
+    }
+
+    #[test]
+    fn a_bare_key_is_never_claimed_and_a_lateral_alias_is_not_a_key_that_went_missing() {
+        // `k` is an alias of the same `SELECT`, read by the key as a column.
+        let r = resolve(
+            "select a.x * 2 as k, sum(a.x) over (partition by a.id order by k) as z from db.s.a a",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        // A bare key no source has is not claimed either: nothing tells it from
+        // a function's argument.
+        let r = resolve(
+            "select row_number() over (partition by a.x order by nope) as z from db.s.a a",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        // In the text fallback, `k` is not claimed while `b.w` is.
+        let r = resolve(
+            "select a.x * 2 as k, row_number() over (partition by id order by k, b.w) as z \
+             from db.s.a a join db.s.b b on a.id = b.id",
+            "snowflake",
+            &a_and_b(),
+        );
+        assert_eq!(partial_of(&r), vec![("z", "name_unresolved", "w")]);
+        // And through a CTE.
+        let r = resolve(
+            "with c as (select id, x from db.s.a), d as (select id, y from db.s.a) \
+             select c.x * 2 as k, row_number() over (partition by id order by k, c.nope) + c.x as z \
+             from c join d on c.id = d.id",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert_eq!(partial_of(&r), vec![("z", "window_key_unbound", "nope")]);
+    }
+
+    #[test]
+    fn a_part_of_a_longer_path_is_never_claimed() {
+        // A variant's key and a struct's field are not columns of a relation.
+        let r = resolve(
+            "select row_number() over (partition by id order by a.payload:customer.ts) as z \
+             from db.s.a a join db.s.b b on a.id = b.id",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "payload"]), vis("DB.S.B", &["id", "w"])],
+        );
+        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        let r = resolve(
+            "select row_number() over (partition by id order by t.rec.field) as z \
+             from db.s.a t join db.s.b b on t.id = b.id",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "rec"]), vis("DB.S.B", &["id", "w"])],
+        );
+        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        let tails = |expr: &str| claimable_tails(expr, &HashSet::from(["rec".to_string()]), &HashSet::from(["t".to_string()]));
+        assert_eq!(tails("o.amount + o.tax::int"), vec!["amount", "tax"]);
+        assert!(tails("t.rec.field").is_empty() && tails("rec.field").is_empty());
+        assert!(tails("a.payload:customer.ts").iter().all(|n| n != "ts"));
+        assert!(tails("db.s.t.x").is_empty() && tails("o.f(1)").is_empty() && tails("'o.amount' + 1.5").is_empty());
+        assert!(tails("s.t").is_empty(), "a table of a subquery is no column");
+    }
+
+    #[test]
+    fn a_nested_query_and_a_lambda_parameter_claim_nothing() {
+        let abc = |v: &[(&str, &[&str])]| v.iter().map(|(r, c)| vis(r, c)).collect::<Vec<_>>();
+        let known = abc(&[("DB.S.A", &["id", "x"]), ("DB.S.B", &["id", "w"]), ("DB.S.C", &["k", "v"])]);
+        for sql in [
+            "select case when exists (select 1 from db.s.c c where c.k = a.id) then 'y' end as z, a.x from db.s.a a",
+            "select count(*) over (partition by id order by exists (select 1 from db.s.c c where c.k = a.x)) + a.x as z \
+             from db.s.a a join db.s.b b on a.id = b.id",
+            "select row_number() over (partition by id order by (select max(c.v) from db.s.c c where c.k = a.x)) as z \
+             from db.s.a a join db.s.b b on a.id = b.id",
+        ] {
+            let r = resolve(sql, "snowflake", &known);
+            assert!(r.partial.is_empty(), "{sql}: {:?}", partial_of(&r));
+        }
+        let tails = |expr: &str| claimable_tails(expr, &HashSet::new(), &HashSet::new());
+        assert_eq!(tails("a.x + (select max(c.v) from c where c.k = a.y) + b.w"), vec!["x", "w"]);
+        assert_eq!(tails("a.x + ( WITH q AS (select 1) select q.v from q) + b.w"), vec!["x", "w"]);
+        assert_eq!(tails("f(a.x, 'it''s (select' ) + b.w"), vec!["x", "w"]);
+        assert_eq!(tails("(selection.v) + b.w"), vec!["v", "w"]);
+        for expr in ["array_size(filter(a.x, e -> e.v > 0))", "transform(a.x, (e, i) -> e.v + i.n)"] {
+            assert_eq!(tails(expr), vec!["x"], "{expr}");
+        }
+        let r = resolve(
+            "select array_size(filter(a.x, e -> e.v > 0)) as z from db.s.a a",
+            "snowflake",
+            &known,
+        );
+        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+    }
+
+    #[test]
+    fn a_capped_count_names_a_column_never_a_relation() {
+        // The expression that passes the ceiling is met entering a table too,
+        // `a` here; the entry is for a column, or for none.
+        for sql in [
+            "with recursive t as (select row_number() over (order by a.x) as n from db.s.a a \
+             union all select n + 1 from t where n < 5) select n from t",
+            "with recursive base as (select id as n from db.s.a), \
+             t as (select n from base union all select n + 1 from t where n < 5) select n from t",
+        ] {
+            let r = resolve(sql, "snowflake", &[vis("DB.S.A", &["id", "x"])]);
+            assert_eq!(partial_of(&r), vec![("n", "steps_capped", "n")], "{sql}");
+            assert!(r.edges.iter().all(|e| e.steps == MAX_STEPS), "the edges are all there: {sql}");
+        }
+    }
+
+    #[test]
+    fn the_entries_are_one_to_a_name_and_come_out_in_order() {
+        let r = resolve(
+            "select row_number() over (partition by a.x order by a.nope) as z, \
+                    row_number() over (partition by a.x order by a.nope, a.none) as y \
+             from db.s.a a",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert_eq!(
+            partial_of(&r),
+            vec![("y", "window_key_unbound", "none"), ("y", "window_key_unbound", "nope"), ("z", "window_key_unbound", "nope")]
+        );
     }
 }

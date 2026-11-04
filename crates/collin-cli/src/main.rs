@@ -262,6 +262,12 @@ fn main() -> ExitCode {
                     t.columns_lost
                 );
             }
+            if t.columns_partial > 0 {
+                println!(
+                    "  {} columns of trusted models partly traced, named in the report",
+                    t.columns_partial
+                );
+            }
             if !o.findings.is_empty() {
                 // The report says what each finding means and what to do; here
                 // only that there is something, and how much.

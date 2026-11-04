@@ -276,6 +276,25 @@ pub fn of(report: &Report) -> Vec<Finding> {
         columns: |m| m.lost_columns.len(),
     });
 
+    group(&mut out, report, Group {
+        category: "lineage_collin_partial",
+        owner: "collin",
+        severity: "warning",
+        one: "model has columns collin traced only in part",
+        many: "models have columns collin traced only in part",
+        why: "The SQL is trusted, and these columns have edges, but not all of what they are: \
+              either their expression reads a qualified name or a window key that collin did not \
+              follow (the edge for it is missing), or the chain of expressions that computes them \
+              is longer than the 32 the cache counts (`steps_capped`; the edges are all there). \
+              Each says which and why.",
+        action: "Nothing to fix in the project. For a name listed, read the model's SQL: the edges \
+                 alone are not all of the column. For `steps_capped`, the edges are all there and \
+                 only the count of expressions is cut. Worth reporting to collin when the SQL is \
+                 ordinary.",
+        pick: |m| some_list(m.partial_columns.iter().filter_map(partial_detail)),
+        columns: |m| m.partial_columns.iter().filter_map(partial_detail).count(),
+    });
+
     out.sort_by_key(|f| {
         let at = |list: &[&str], v: &str| list.iter().position(|x| *x == v).unwrap_or(list.len());
         (at(&OWNERS, f.owner), at(&SEVERITIES, f.severity))
@@ -327,6 +346,15 @@ fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
+/// A partial column as the finding words it, or none when every gap of it is a
+/// read of a name a CTE lacks: the project finding `reads_a_name_its_cte_lacks`
+/// says that one, and it is the project's to fix.
+fn partial_detail(p: &crate::report::PartialColumn) -> Option<String> {
+    let gaps: Vec<String> =
+        p.gaps.iter().filter(|g| g.reason != "cte_lacks_name").map(|g| format!("{} {}", g.reason, g.name)).collect();
+    (!gaps.is_empty()).then(|| format!("{} ({})", p.column, gaps.join(", ")))
+}
+
 /// The items, comma separated, ten at most and how many more: None for none.
 fn some_list(items: impl Iterator<Item = String>) -> Option<String> {
     let all: Vec<String> = items.collect();
@@ -343,7 +371,7 @@ fn some_list(items: impl Iterator<Item = String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::report::{CatalogElsewhere, LostColumn, LostEnd};
+    use crate::report::{CatalogElsewhere, LostColumn, LostEnd, PartialColumn, PartialGap};
 
     fn model(name: &str) -> ModelReport {
         ModelReport {
@@ -442,6 +470,45 @@ mod tests {
         let order: Vec<&str> = of(&report).iter().map(|f| f.category).collect();
         assert_eq!(order, vec!["catalog_of_another_target", "yaml_out_of_date", "lineage_collin_lost"]);
         assert_eq!(of(&report)[2].models[0].detail, "x (phantom)");
+    }
+
+    #[test]
+    fn a_partial_column_is_a_finding_of_its_own_beside_the_lost_one() {
+        let mut partial = model("partial");
+        partial.partial_columns = vec![PartialColumn {
+            column: "z".into(),
+            gaps: vec![PartialGap { reason: "window_key_unbound", name: "nope".into() }],
+        }];
+        let found = of(&Report { models: vec![partial], ..Default::default() });
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].category, found[0].owner, found[0].columns), ("lineage_collin_partial", "collin", 1));
+        assert_eq!(found[0].models[0].detail, "z (window_key_unbound nope)");
+        assert_eq!(found[0].title, "1 model has columns collin traced only in part");
+    }
+
+    #[test]
+    fn a_name_a_cte_lacks_is_the_projects_finding_and_not_the_partial_one() {
+        let mut m = model("m");
+        m.partial_columns = vec![
+            PartialColumn { column: "a".into(), gaps: vec![PartialGap { reason: "cte_lacks_name", name: "c".into() }] },
+            PartialColumn {
+                column: "b".into(),
+                gaps: vec![
+                    PartialGap { reason: "cte_lacks_name", name: "c".into() },
+                    PartialGap { reason: "steps_capped", name: "n".into() },
+                ],
+            },
+        ];
+        let found = of(&Report { models: vec![m], ..Default::default() });
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].columns, 1);
+        assert_eq!(found[0].models[0].detail, "b (steps_capped n)");
+        let mut only = model("only");
+        only.partial_columns = vec![PartialColumn {
+            column: "a".into(),
+            gaps: vec![PartialGap { reason: "cte_lacks_name", name: "c".into() }],
+        }];
+        assert!(of(&Report { models: vec![only], ..Default::default() }).is_empty());
     }
 
     #[test]

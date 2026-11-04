@@ -22,7 +22,7 @@ is built this way, for whoever changes it next.
 | [0014](0014-a-contested-relation-goes-to-the-claimant-the-model-reads.md) | A contested relation goes to the claimant the model reads | changing how an edge's source node is found from a relation, or touching `by_relation` |
 | [0015](0015-an-ephemeral-parent-is-read-through.md) | An ephemeral parent is read through | changing which relations the engine is handed, or which parents inference matches against |
 | [0016](0016-a-root-is-read-where-the-walk-ends.md) | A root is read where the walk ends | changing what `Resolved::roots` holds, or counting a column with no edge as a gap |
-| [0017](0017-a-column-with-no-lineage-is-named.md) | A column with no lineage is named | changing what keeps a trusted model out of `models`, or filling a column left without an edge |
+| [0017](0017-a-column-with-no-lineage-is-named.md) | A column with no lineage is named | changing what keeps a trusted model out of `models`, filling a column left without an edge, or naming one that kept an edge and lost another |
 | [0018](0018-two-scopes-of-one-name-are-not-trusted.md) | Two scopes of one name are not trusted | changing what sets a compile aside, or relying on the engine to keep two derived tables or CTEs apart |
 | [0019](0019-a-read-the-sql-cannot-back-is-not-parsed.md) | A read the SQL cannot back is not parsed | following a derivation past a CTE, retracting a compile's list, or publishing an inferred edge from a parsed model |
 | [0020](0020-a-column-read-downstream-is-the-parent-s-finding.md) | A column read downstream is the parent's finding | changing which issues keep a model out of the clean ones, or acting on a column a child reads that its parent's list lacks |
@@ -56,6 +56,7 @@ is built this way, for whoever changes it next.
 | [0048](0048-a-file-the-manifest-names-is-read-inside-the-folder-it-came-from.md) | A file the manifest names is read inside the folder it came from | changing how a compiled file or a seed's CSV is opened, or how the cache and the report are written |
 | [0049](0049-a-correlated-name-is-read-where-its-qualifier-is-defined.md) | A correlated name is read where its qualifier is defined | changing which sources a `WHERE` or a `HAVING` binds its names to, or what a nested query is allowed to see of the one around it |
 | [0050](0050-a-model-s-rules-and-a-column-s-expression-go-in-the-cache.md) | A model's rules and a column's expression go in the cache | changing what `Rule` or `Expression` carry, adding a list to the cache, or reading a predicate or an expression text out of the engine |
+| [0051](0051-a-column-with-an-edge-and-a-lost-name-is-partial.md) | A column with an edge and a lost name is partial | changing what the walk records where it gives up on a name, adding a reason to `Partial`, or deciding how a column that kept an edge and lost another is called |
 
 ## The other side of the boundary
 
