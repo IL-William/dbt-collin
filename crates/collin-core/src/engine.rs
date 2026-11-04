@@ -2125,13 +2125,25 @@ fn claimable_tails(expr: &str, columns: &HashSet<String>, tables: &HashSet<Strin
     // The parameters of every lambda in the text: a single name, or a list in
     // parentheses, before an arrow.
     let mut lambda: HashSet<String> = HashSet::new();
+    // An arrow inside a string literal is text, and the walk to find them steps
+    // over a literal as the scan below does. Every cut is made on a character
+    // boundary: `trim_end` and `rfind` give one, and the rest is ASCII.
     let mut at = 0;
-    while let Some(arrow) = expr[at..].find("->").map(|n| n + at) {
-        let mut end = arrow;
-        while end > 0 && (bytes[end - 1] as char).is_whitespace() {
-            end -= 1;
+    while at < bytes.len() {
+        if bytes[at] == b'\'' {
+            at += 1;
+            while at < bytes.len() && bytes[at] != b'\'' {
+                at += 1;
+            }
+            at += 1;
+            continue;
         }
-        let start = if end > 0 && bytes[end - 1] == b')' {
+        if !(bytes[at] == b'-' && bytes.get(at + 1) == Some(&b'>')) {
+            at += 1;
+            continue;
+        }
+        let end = expr[..at].trim_end().len();
+        let start = if expr[..end].ends_with(')') {
             expr[..end].rfind('(').map_or(end, |n| n + 1)
         } else {
             let mut from = end;
@@ -2146,7 +2158,7 @@ fn claimable_tails(expr: &str, columns: &HashSet<String>, tables: &HashSet<Strin
                 .filter(|w| !w.is_empty())
                 .map(str::to_lowercase),
         );
-        at = arrow + 2;
+        at += 2;
     }
     let mut i = 0;
     while i < bytes.len() {
@@ -2208,7 +2220,7 @@ fn claimable_tails(expr: &str, columns: &HashSet<String>, tables: &HashSet<Strin
                     && !bytes[start].is_ascii_digit()
                 {
                     let mut k = end;
-                    while k < bytes.len() && (bytes[k] as char).is_whitespace() {
+                    while k < bytes.len() && bytes[k].is_ascii_whitespace() {
                         k += 1;
                     }
                     let name = expr[start..end].to_lowercase();
@@ -5108,6 +5120,20 @@ mod tests {
         assert_eq!(tails("(selection.v) + b.w"), vec!["v", "w"]);
         for expr in ["array_size(filter(a.x, e -> e.v > 0))", "transform(a.x, (e, i) -> e.v + i.n)"] {
             assert_eq!(tails(expr), vec!["x"], "{expr}");
+        }
+        // An arrow in a literal is text, and a multibyte character beside it
+        // must not be cut in two.
+        for text in ["a.x = 'voilà -> b'", "a.x = 'х -> y'", "a.x = 'voilà\u{a0}-> b' and a.y = 'é\u{85}'"] {
+            assert!(tails(text).starts_with(&["x".to_string()]), "{text}");
+        }
+        assert_eq!(tails("a.x = 'voilà -> b' and e -> e.v"), vec!["x"]);
+        for sql in [
+            "select row_number() over (partition by a.id order by a.x) || 'х -> y' as z from db.s.a a",
+            "select row_number() over (partition by a.id order by b.w = 'voilà -> ok') as z \\
+             from db.s.a a join db.s.b b on a.id = b.id",
+        ] {
+            let r = resolve(sql, "snowflake", &a_and_b());
+            assert!(r.partial.is_empty(), "{sql}: {:?}", partial_of(&r));
         }
         let r = resolve(
             "select array_size(filter(a.x, e -> e.v > 0)) as z from db.s.a a",

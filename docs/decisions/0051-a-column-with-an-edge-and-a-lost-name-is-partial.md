@@ -60,7 +60,9 @@ there. The reasons are:
   without its qualifier, or a bare name in a text, that a relation lacks is not
   named. A quoted name read in a text (`b."NOPE"`) is never claimed, though as
   a key it is. A name equal to the last part of a relation's name is never
-  claimed. A subquery's own names are never claimed. The record errs towards
+  claimed. A subquery's own names are never claimed. A qualifier named like any
+  lambda parameter of the same text is passed over, wherever it is written:
+  `filter(a.arr, a -> a.v > 0), a.nope` loses `a.nope` too. The record errs towards
   silence and never towards a claim it cannot back.
 - **A name another relation gave an edge for is not lost.** The text the engine
   hangs off one relation can name the columns of the next. For each output the
