@@ -202,6 +202,10 @@ pub struct Totals {
     /// Output columns of trusted models that came out with no edge and are not
     /// built from literals. See `ModelReport::lost_columns`.
     pub columns_lost: usize,
+    /// Output columns of trusted models that have an edge and lost a name the
+    /// walk could not follow, once each: the columns with a gap that
+    /// `PartialGap::is_loss` counts. See `ModelReport::partial_columns`.
+    pub columns_partial: usize,
     /// Models whose SQL gives one name to two scopes. See
     /// `ModelReport::merged_scopes`.
     pub scope_merged: usize,
@@ -311,6 +315,20 @@ pub struct ModelReport {
     /// lost says nothing about what the cache holds.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub lost_columns: Vec<LostColumn>,
+    /// Output columns of a trusted compile that have an edge and were not traced
+    /// whole: a name their expression reads that the walk gave up on, or a chain
+    /// of expressions longer than the 32 the cache counts (`steps_capped`, where
+    /// the edges are all there), with why. The edges such a column has stand;
+    /// what it lacks is named here so that it is not taken for complete (0051).
+    ///
+    /// All of them are listed. Only a column with a gap that `PartialGap::is_loss`
+    /// counts makes the model unclean, raises the finding and is counted in
+    /// `totals.columns_partial`.
+    ///
+    /// Only for a compile the plan trusted, as `lost_columns`, and for the
+    /// columns the plan trusts it for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub partial_columns: Vec<PartialColumn>,
     /// Names the SQL gives to two derived tables, or two CTEs, of one
     /// statement. The engine reads them apart since the fork's seventh patch,
     /// so this is a fact about the SQL, not a fault (0018).
@@ -386,6 +404,39 @@ pub struct MergedScopeReport {
 pub struct LostColumn {
     pub column: String,
     pub ends: Vec<LostEnd>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct PartialColumn {
+    pub column: String,
+    /// Every gap, sorted by reason and name.
+    pub gaps: Vec<PartialGap>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct PartialGap {
+    /// `name_unresolved`, `relation_unknown`, `cte_lacks_name`,
+    /// `window_key_unbound` or `steps_capped`.
+    pub reason: &'static str,
+    pub name: String,
+}
+
+impl PartialGap {
+    /// Whether the gap is a name lost that nothing else in the report says: the
+    /// one predicate the clean gate, the finding and the total share, so that
+    /// their numbers agree. `steps_capped` is not one, the edges being all
+    /// there. `cte_lacks_name` is not either: the unbacked read already keeps
+    /// the model out of clean, and the project finding for it speaks.
+    pub fn is_loss(&self) -> bool {
+        matches!(self.reason, "name_unresolved" | "relation_unknown" | "window_key_unbound")
+    }
+}
+
+impl PartialColumn {
+    /// The column has a gap `PartialGap::is_loss` counts.
+    pub fn has_loss(&self) -> bool {
+        self.gaps.iter().any(PartialGap::is_loss)
+    }
 }
 
 /// Where the walk back from a lost column stopped.
@@ -524,6 +575,7 @@ mod tests {
             yaml_stale: false,
             thin: None,
             lost_columns: Vec::new(),
+            partial_columns: Vec::new(),
             merged_scopes: Vec::new(),
             unbacked: Vec::new(),
             edges_inferred: 0,
@@ -533,6 +585,7 @@ mod tests {
         };
         let none = serde_json::to_string(&model(Vec::new())).unwrap();
         assert!(!none.contains("lost_columns"), "an entry with nothing lost reads as before: {none}");
+        assert!(!none.contains("partial_columns"), "nor with nothing partial: {none}");
         assert!(!none.contains("undeclared_relations"), "{none}");
         assert!(!none.contains("sql_file"), "SQL from the manifest reads as before: {none}");
         let one = serde_json::to_string(&model(v(&["RAW_DB.DBO.ORDERS_BASE"]))).unwrap();

@@ -34,9 +34,9 @@ Linux on x86_64 and one for Windows on x86_64, each with a build provenance
 GitHub attests:
 
 ```
-curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.11.1/collin-v0.11.1-aarch64-apple-darwin.tar.gz
-gh attestation verify collin-v0.11.1-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
-tar -xzf collin-v0.11.1-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.0/collin-v0.12.0-aarch64-apple-darwin.tar.gz
+gh attestation verify collin-v0.12.0-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
+tar -xzf collin-v0.12.0-aarch64-apple-darwin.tar.gz
 ```
 
 The binary is not notarized. Downloaded with `curl` it runs as is; downloaded
@@ -45,9 +45,9 @@ with a browser, macOS refuses it until `xattr -d com.apple.quarantine collin`.
 On Windows, from Git Bash:
 
 ```
-curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.11.1/collin-v0.11.1-x86_64-pc-windows-msvc.zip
-gh attestation verify collin-v0.11.1-x86_64-pc-windows-msvc.zip --repo IL-William/dbt-collin
-unzip collin-v0.11.1-x86_64-pc-windows-msvc.zip
+curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.0/collin-v0.12.0-x86_64-pc-windows-msvc.zip
+gh attestation verify collin-v0.12.0-x86_64-pc-windows-msvc.zip --repo IL-William/dbt-collin
+unzip collin-v0.12.0-x86_64-pc-windows-msvc.zip
 ```
 
 `collin.exe` is not signed. Downloaded with `curl` in Git Bash it runs as is;
@@ -60,7 +60,7 @@ compiler, which `cargo install` does.
 From source, with Rust 1.82 or later:
 
 ```
-cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.11.1 collin-cli
+cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.12.0 collin-cli
 ```
 
 `collin --version` says which collin it is, and the cache it writes names it
@@ -138,11 +138,23 @@ expression once more on every lap, and the count is then no path's length.
 A copy, a rename and a hash have none: their edges say it
 ([0050](docs/decisions/0050-a-model-s-rules-and-a-column-s-expression-go-in-the-cache.md)).
 
+A column that has an edge and was not traced whole is listed under `partial`
+with the name and the reason: `name_unresolved`, `relation_unknown`,
+`cte_lacks_name` or `window_key_unbound`, when its expression reads a qualified
+name the walk gave up on, or `steps_capped`, when the chain of expressions that
+computes it is longer than the 32 `steps` counts (the edges are all there, and
+the name is the column the walk was entering). Its edges stand; for the first
+four the entry says they are not all of it. A column with no edge at all is a
+lost column of the report, not here
+([0051](docs/decisions/0051-a-column-with-an-edge-and-a-lost-name-is-partial.md)).
+
 ```json
 "rules": [{"node": "model.shop.orders", "clause": "WHERE", "text": "status <> 'cancelled'",
            "columns": [{"node": "model.shop.stg_orders", "column": "status"}]}],
 "expressions": [{"node": "model.shop.orders", "column": "amount_eur", "kind": "transform",
-                 "text": "amount * fx.rate", "steps": 2}]
+                 "text": "amount * fx.rate", "steps": 2}],
+"partial": [{"node": "model.shop.orders", "column": "line_no", "reason": "window_key_unbound",
+             "name": "shipped_at"}]
 ```
 
 ## The three sources of truth
@@ -270,11 +282,27 @@ in its table's order, the catalog's `index` or the parent's projection, since a
   as the cause. A name read inside an expression through such a star,
   `upper(s.x)` rather than `s.x`, gets no column from the engine and is counted
   among the roots. Rebuilding the dev table is the remedy.
-- **A column that keeps one input and loses another** is not named. The report's
-  `lost_columns` lists the output columns of a trusted compile that came out with
-  no edge at all, and why the walk back from each stopped
-  ([0017](docs/decisions/0017-a-column-with-no-lineage-is-named.md)); an edge
-  from one parent hides the loss of the other.
+- **A column that keeps one input and loses another** is named where the walk
+  knows it gave up, and not everywhere. The report's `lost_columns` lists the
+  output columns of a trusted compile that came out with no edge at all, and why
+  the walk back from each stopped
+  ([0017](docs/decisions/0017-a-column-with-no-lineage-is-named.md)); a column
+  that has an edge and lost a name beside it is in `partial_columns` and in the
+  cache's `partial`, with the name and why. A column counts toward the model's
+  unclean state, the finding and `columns_partial` when it lost a name
+  (`name_unresolved`, `relation_unknown`, `window_key_unbound`); `steps_capped`
+  (the edges are all there) and `cte_lacks_name` (the unbacked read already says
+  it) are listed and not counted
+  ([0051](docs/decisions/0051-a-column-with-an-edge-and-a-lost-name-is-partial.md)).
+  Still not named: a bare name, which is never claimed because it cannot be
+  told from a keyword, a date part or an alias; a part of a longer path
+  (a struct's field, a variant's key); a quoted name read in a text; a column
+  read through a qualifier that is itself the alias of a `VALUES` list or of a
+  `lateral flatten`; a name
+  equal to a relation's last part; the names inside a subquery; the names of a clause-level
+  placement (`unplaced_*`), of a scope merged under one name, and of a derived
+  table or a union branch the engine drops before a node exists; and a name a
+  CTE-hung derivation reads that the CTE lacks, unless it is an unbacked read.
 - **A join key, a filter and a `QUALIFY` dedup key** have no output column to
   hang off, so they are named in the report and reach the cache only under
   `--indirect`. `QUALIFY` is read off the syntax tree here, each clause in the

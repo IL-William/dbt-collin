@@ -28,7 +28,7 @@ use crate::engine::{self, Visible};
 use crate::manifest::{norm_relation, Node, Project, RawManifest, SqlSource};
 use crate::report::{
     self, IndirectReport, LostColumn, LostEnd, LostRelation, MergedScopeReport, ModelReads,
-    AmbiguousInferred, ModelReport, ReadDownstream, RelationCollision, Report, ReportIssue, Thin,
+    PartialColumn, PartialGap, AmbiguousInferred, ModelReport, ReadDownstream, RelationCollision, Report, ReportIssue, Thin,
     Totals, UnbackedReport,
 };
 use crate::role;
@@ -154,6 +154,8 @@ pub struct Run {
     pub rules: Vec<cache::Rule>,
     /// In the same order, and within a model by column.
     pub expressions: Vec<cache::Expression>,
+    /// In the same order, and within a model by column, reason and name.
+    pub partial: Vec<cache::Partial>,
     pub report: Report,
 }
 
@@ -204,6 +206,8 @@ pub struct Seen<'a> {
     pub published_rules: &'a [cache::Rule],
     /// The expressions this model put in the cache, as written.
     pub published_expressions: &'a [cache::Expression],
+    /// The partial columns this model put in the cache, as written.
+    pub published_partial: &'a [cache::Partial],
 }
 
 /// The dbt unique_id behind a relation a model reads, or the `rel:` escape
@@ -224,11 +228,11 @@ fn node_for(project: &Project, read: &HashMap<String, Option<String>>, relation:
 
 pub fn generate(opts: &Options) -> Result<Outcome, String> {
     let Loaded { project, warehouse, catalog_elsewhere } = load(opts)?;
-    let Run { edges, roots, rules, expressions, mut report } = run(&project, warehouse, opts);
+    let Run { edges, roots, rules, expressions, partial, mut report } = run(&project, warehouse, opts);
     report.set_catalog_elsewhere(catalog_elsewhere);
     report.findings = crate::findings::of(&report);
     let (out, report_path) = (opts.out_path(), opts.report_path());
-    Cache::new(opts.target.clone(), edges, roots, rules, expressions).write(&out)?;
+    Cache::new(opts.target.clone(), edges, roots, rules, expressions, partial).write(&out)?;
     report.write(&report_path)?;
     Ok(Outcome { totals: report.totals, findings: report.findings, out, report: report_path })
 }
@@ -310,6 +314,7 @@ pub fn run_observed(
     let mut roots: Vec<cache::Root> = Vec::new();
     let mut rules: Vec<cache::Rule> = Vec::new();
     let mut expressions: Vec<cache::Expression> = Vec::new();
+    let mut partial: Vec<cache::Partial> = Vec::new();
     // What each model's compile produced, kept past a retraction: a child's
     // read of a column its parent's list lacks is explained if the parent's own
     // compile has it.
@@ -461,6 +466,7 @@ pub fn run_observed(
             published_roots: &published.roots,
             published_rules: &published.rules,
             published_expressions: &published.expressions,
+            published_partial: &published.partial,
         });
         for a in &published.ambiguous {
             match a.by {
@@ -539,6 +545,8 @@ pub fn run_observed(
             Plan::Inferred => Vec::new(),
         };
         rep.totals.columns_lost += lost.len();
+        let partial_columns = partial_columns(&published.partial);
+        rep.totals.columns_partial += partial_columns.iter().filter(|c| c.has_loss()).count();
         let unbacked = unbacked_report(&resolved);
         rep.totals.unbacked_reads += unbacked.len();
         if !resolved.merged_scopes.is_empty() {
@@ -662,6 +670,7 @@ pub fn run_observed(
             && !stale
             && !gap
             && lost.is_empty()
+            && !partial_columns.iter().any(PartialColumn::has_loss)
             && unbacked.is_empty()
             && !unexplained
             // Its columns are counted apart from the roots and named nowhere
@@ -697,6 +706,7 @@ pub fn run_observed(
                 yaml_stale: stale,
                 thin,
                 lost_columns: lost,
+                partial_columns,
                 unbacked,
                 edges_inferred: match plan {
                     Plan::Parsed | Plan::PerColumn => published.inferred,
@@ -731,6 +741,7 @@ pub fn run_observed(
         roots.extend(published.roots);
         rules.extend(published.rules);
         expressions.extend(published.expressions);
+        partial.extend(published.partial);
     }
 
     for (parent, reads) in downstream {
@@ -759,7 +770,7 @@ pub fn run_observed(
     }
     rep.models.sort_by(|a, b| a.name.cmp(&b.name));
     rep.row_deciding_reads.sort_by(|a, b| a.name.cmp(&b.name));
-    Run { edges, roots, rules, expressions, report: rep }
+    Run { edges, roots, rules, expressions, partial, report: rep }
 }
 
 /// A name a compile reads through a `select *` over one relation whose list
@@ -871,6 +882,20 @@ fn unbacked_report(resolved: &engine::Resolved) -> Vec<UnbackedReport> {
         }
     }
     out.sort_by(|a, b| (&a.cte, &a.column).cmp(&(&b.cte, &b.column)));
+    out
+}
+
+/// A model's partial columns as the report lists them, a column once with all
+/// its gaps. The cache's entries come sorted by column, reason and name.
+fn partial_columns(published: &[cache::Partial]) -> Vec<PartialColumn> {
+    let mut out: Vec<PartialColumn> = Vec::new();
+    for p in published {
+        let gap = PartialGap { reason: p.reason, name: p.name.clone() };
+        match out.last_mut() {
+            Some(last) if last.column == p.column => last.gaps.push(gap),
+            _ => out.push(PartialColumn { column: p.column.clone(), gaps: vec![gap] }),
+        }
+    }
     out
 }
 
@@ -1092,6 +1117,8 @@ struct Published {
     /// edges (0050).
     rules: Vec<cache::Rule>,
     expressions: Vec<cache::Expression>,
+    /// The columns that have an edge and were not traced whole (0051).
+    partial: Vec<cache::Partial>,
 }
 
 impl Published {
@@ -1207,7 +1234,27 @@ fn publish(
             expressions: if r.complete { r.expressions.clone() } else { Vec::new() },
         })
         .collect();
-    Published { plan, edges, direct, inferred, bridged, ambiguous, roots, rules, expressions }
+    // What the walk gave up on, where the SQL is trusted and for the columns it
+    // is trusted for, and only in a column the cache gives a direct edge: one
+    // with none is a lost column, and one whose only edge the pass dropped has
+    // nothing to be partial of.
+    let partial = resolved
+        .partial
+        .iter()
+        .filter(|p| match plan {
+            Plan::Parsed => true,
+            Plan::PerColumn => shared.contains(&p.output),
+            Plan::Inferred => false,
+        })
+        .filter(|p| fed.contains(p.output.as_str()))
+        .map(|p| cache::Partial {
+            node: model.uid.clone(),
+            column: p.output.clone(),
+            reason: p.reason.as_str(),
+            name: p.name.clone(),
+        })
+        .collect();
+    Published { plan, edges, direct, inferred, bridged, ambiguous, roots, rules, expressions, partial }
 }
 
 /// Where `cache::Expression::text` is cut. A few expressions run to thousands
@@ -3531,6 +3578,130 @@ mod tests {
         assert_eq!(r.report.totals.columns_lost, 2);
     }
 
+    fn partial_of(r: &Run) -> Vec<(&str, &str, &str, &str)> {
+        r.partial.iter().map(|p| (p.node.as_str(), p.column.as_str(), p.reason, p.name.as_str())).collect()
+    }
+
+    #[test]
+    fn a_column_that_keeps_an_edge_and_loses_a_name_is_partial_and_unclean() {
+        let sql = "select r.id, row_number() over (partition by r.id order by r.nope) as z from db.sch.raw r";
+        for indirect in [false, true] {
+            let r = ruled(sql, &["id", "z"], indirect);
+            assert_eq!(partial_of(&r), vec![("model.p.m", "z", "window_key_unbound", "nope")]);
+            // Its edge stands: the entry is beside it, not instead.
+            assert!(r.edges.iter().any(|e| e.to == "model.p.m" && e.to_col == "z" && e.from_col == "id"));
+            let [m] = r.report.models.as_slice() else { panic!("{:?}", r.report.models.len()) };
+            assert_eq!(
+                m.partial_columns,
+                vec![PartialColumn {
+                    column: "z".into(),
+                    gaps: vec![PartialGap { reason: "window_key_unbound", name: "nope".into() }],
+                }]
+            );
+            assert_eq!((r.report.totals.columns_partial, r.report.totals.columns_lost), (1, 0));
+            let found: Vec<&str> = crate::findings::of(&r.report).iter().map(|f| f.category).collect();
+            assert_eq!(found, vec!["lineage_collin_partial"]);
+        }
+        // The same column traced whole is neither listed nor unclean.
+        let r = ruled("select r.id, row_number() over (partition by r.id order by r.ts) as z from db.sch.raw r", &["id", "z"], false);
+        assert!(r.partial.is_empty() && r.report.models.is_empty(), "{:?}", partial_of(&r));
+        assert_eq!(r.report.totals.columns_partial, 0);
+        let text = serde_json::to_string(&Cache::new("t".into(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), r.partial)).unwrap();
+        assert!(!text.contains("partial"), "{text}");
+    }
+
+    #[test]
+    fn a_column_whose_only_edge_is_a_read_of_the_model_itself_is_not_partial() {
+        // The engine feeds `z` from the model's own relation, which the pass
+        // drops (a model never feeds its own column), so the cache has no edge
+        // for it and the key it lost is not a partial column's to say. The same
+        // holds for a model reading nothing else, whose every edge is such a
+        // read (0039): that is why `publish` needs no other guard for it.
+        for (sql, parents) in [
+            (
+                "select max(m.q) over (order by r.nope) as z from db.sch.raw r join db.sch.m m on r.id = m.id",
+                vec!["source.p.raw"],
+            ),
+            ("select max(m.q) over (order by m.nope) as z from db.sch.m m", Vec::new()),
+        ] {
+            let mut raw = node("source.p.raw", "db.sch.raw", &[], &[]);
+            raw.1.kind = "source".into();
+            let mut m = node("model.p.m", "db.sch.m", &parents, &[]);
+            m.1.sql = sql.into();
+            let warehouse = HashMap::from([
+                ("source.p.raw".to_string(), cols(&["id", "ts"])),
+                ("model.p.m".to_string(), cols(&["z"])),
+            ]);
+            let (mut engine_side, mut cache_side) = (0, 0);
+            let r = run_observed(&project_of(vec![raw, m]), warehouse, &opts(true, false), |s| {
+                engine_side = s.resolved.partial.len();
+                cache_side = s.published_partial.len();
+            });
+            assert!(r.partial.is_empty() && cache_side == 0, "{sql}");
+            assert_eq!(r.report.totals.columns_partial, 0, "{sql}");
+            // The engine does name it: the filter at `publish` is what keeps it
+            // out of the cache.
+            assert_eq!(engine_side, 1, "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_capped_count_is_in_the_cache_and_does_not_make_a_model_unclean() {
+        // The edges are all there: only the count of expressions is cut at 32.
+        let r = ruled(
+            "with recursive t as (select r.id as n from db.sch.raw r union all select n + 1 from t where n < 5) \
+             select n from t",
+            &["n"],
+            false,
+        );
+        assert_eq!(partial_of(&r), vec![("model.p.m", "n", "steps_capped", "n")]);
+        assert!(r.edges.iter().any(|e| e.to_col == "n" && e.from_col == "id"));
+        assert!(r.report.models.is_empty(), "{:?}", r.report.models.len());
+        assert_eq!(r.report.totals.columns_partial, 0);
+        assert!(crate::findings::of(&r.report).is_empty());
+    }
+
+    #[test]
+    fn a_compile_set_aside_has_no_partial_column_and_a_degraded_one_only_where_it_is_trusted() {
+        let sql = "select row_number() over (partition by r.id order by r.nope) as z, \
+                          row_number() over (partition by r.id order by r.nope) as y from db.sch.raw r";
+        let model = |outputs: &[&str]| {
+            let mut raw = node("source.p.raw", "db.sch.raw", &[], &[]);
+            raw.1.kind = "source".into();
+            let mut m = node("model.p.m", "db.sch.m", &["source.p.raw"], &[]);
+            m.1.sql = sql.into();
+            let warehouse = HashMap::from([
+                ("source.p.raw".to_string(), cols(&["amount", "id", "status", "ts"])),
+                ("model.p.m".to_string(), cols(outputs)),
+            ]);
+            run(&project_of(vec![raw, m]), warehouse, &opts(true, false))
+        };
+        // The table shares no column with the compile: its edges are inferred.
+        let aside = model(&["amount", "id"]);
+        assert!(aside.partial.is_empty(), "{:?}", partial_of(&aside));
+        assert!(aside.report.models.iter().all(|m| m.partial_columns.is_empty()));
+        assert_eq!(aside.report.totals.columns_partial, 0);
+        // Sharing `z` keeps the compile for `z` alone.
+        let per_column = model(&["amount", "z"]);
+        assert_eq!(partial_of(&per_column), vec![("model.p.m", "z", "window_key_unbound", "nope")]);
+        assert_eq!(per_column.report.totals.columns_partial, 1);
+    }
+
+    #[test]
+    fn a_partial_column_goes_out_after_the_expressions_in_one_order() {
+        let r = ruled(
+            "select row_number() over (partition by r.id order by r.nope, r.none) as z, \
+                    row_number() over (partition by r.id order by r.nope) as a from db.sch.raw r",
+            &["a", "z"],
+            false,
+        );
+        let listed: Vec<(&str, &str)> = r.partial.iter().map(|p| (p.column.as_str(), p.name.as_str())).collect();
+        assert_eq!(listed, vec![("a", "nope"), ("z", "none"), ("z", "nope")]);
+        let [m] = r.report.models.as_slice() else { panic!() };
+        assert_eq!(m.partial_columns.len(), 2, "a column once, with its gaps: {:?}", m.partial_columns);
+        assert_eq!(r.report.totals.columns_partial, 2);
+    }
+
     #[test]
     fn a_contested_relation_goes_to_the_claimant_the_model_depends_on() {
         // Two sources declare one table, spelt in two cases. Across the project
@@ -4673,7 +4844,7 @@ mod tests {
             }
             let edges = |v: &serde_json::Value| -> HashSet<String> {
                 let listed = |k: &str| v[k].as_array().cloned().unwrap_or_default();
-                ["edges", "roots", "rules", "expressions"]
+                ["edges", "roots", "rules", "expressions", "partial"]
                     .into_iter()
                     .flat_map(listed)
                     .map(|e| e.to_string())
@@ -4695,13 +4866,14 @@ mod tests {
         }
     }
 
-    /// The cache with one edge a line, and one root, rule and expression, so
+    /// The cache with one edge a line, and one root, rule, expression and
+    /// partial column, so
     /// that the diff of an expected cache shows each that moved and nothing else.
     fn one_edge_a_line(cache: &serde_json::Value) -> String {
         let mut head = cache.clone();
         let fields = head.as_object_mut().unwrap();
         let lists: Vec<(&str, serde_json::Value)> =
-            ["edges", "roots", "rules", "expressions"]
+            ["edges", "roots", "rules", "expressions", "partial"]
                 .into_iter()
                 .filter_map(|k| fields.remove(k).map(|v| (k, v)))
                 .collect();

@@ -14,7 +14,8 @@
 //!
 //! `rules` and `expressions` are the two other lists beside the edges, for what
 //! an edge cannot say: which predicates decide a model's rows, and what computes
-//! a column (0050).
+//! a column (0050). `partial` is a third, for the column that has its edges and
+//! was not traced whole (0051).
 
 use serde::Serialize;
 
@@ -59,6 +60,11 @@ pub struct Cache {
     /// or a window. Left out when empty, like `roots`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub expressions: Vec<Expression>,
+    /// The columns whose edges are not all of what they are: a name the walk
+    /// gave up on, or a chain of expressions longer than `steps` counts, and
+    /// why. Left out when empty, like `roots`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub partial: Vec<Partial>,
 }
 
 #[derive(Serialize)]
@@ -132,6 +138,23 @@ pub struct Expression {
     pub cut: bool,
 }
 
+/// A name that one output column of a model reads and that the walk did not
+/// follow, or a chain of expressions cut at the ceiling of `steps`, in a column
+/// that has an edge all the same (0051).
+#[derive(Serialize)]
+pub struct Partial {
+    /// The model's unique_id.
+    pub node: String,
+    pub column: String,
+    /// `name_unresolved`, `relation_unknown`, `cte_lacks_name`,
+    /// `window_key_unbound` or `steps_capped`.
+    pub reason: &'static str,
+    /// The name, lower case. For `steps_capped` nothing is missing: it is the
+    /// column the walk was entering when the count reached its ceiling, and the
+    /// edges are all there.
+    pub name: String,
+}
+
 impl Cache {
     pub fn new(
         target: String,
@@ -139,6 +162,7 @@ impl Cache {
         roots: Vec<Root>,
         rules: Vec<Rule>,
         expressions: Vec<Expression>,
+        partial: Vec<Partial>,
     ) -> Cache {
         Cache {
             version: VERSION,
@@ -150,6 +174,7 @@ impl Cache {
             roots,
             rules,
             expressions,
+            partial,
         }
     }
 
@@ -217,14 +242,25 @@ mod tests {
 
     #[test]
     fn a_cache_names_what_produced_it() {
-        let c = Cache::new("dev".into(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let c = Cache::new("dev".into(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let text = serde_json::to_string(&c).unwrap();
         assert!(text.contains("\"source\":\"collin\""), "{text}");
         assert!(!text.contains("roots"), "a cache with no root reads as before: {text}");
         assert!(!text.contains("rules") && !text.contains("expressions"), "nor with no rule or expression: {text}");
+        assert!(!text.contains("partial"), "nor with no partial column: {text}");
         assert!(text.contains("\"version\":1"), "{text}");
         let producer = format!("\"producer\":\"collin {}\"", env!("CARGO_PKG_VERSION"));
         assert!(text.contains(&producer), "{text}");
+    }
+
+    #[test]
+    fn a_partial_column_is_written_when_there_is_one() {
+        let one = Partial { node: "m".into(), column: "z".into(), reason: "name_unresolved", name: "w".into() };
+        let c = Cache::new("dev".into(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), vec![one]);
+        let text = serde_json::to_string(&c).unwrap();
+        let entry = "\"partial\":[{\"node\":\"m\",\"column\":\"z\",\"reason\":\"name_unresolved\",\"name\":\"w\"}]";
+        assert!(text.contains(entry), "{text}");
+        assert!(text.contains("\"version\":1"), "{text}");
     }
 
     #[test]
@@ -246,7 +282,7 @@ mod tests {
         std::fs::write(&victim, "mine").unwrap();
         let path = dir.join("column_lineage.collin.json");
         std::os::unix::fs::symlink(&victim, &path).unwrap();
-        Cache::new("dev".into(), Vec::new(), Vec::new(), Vec::new(), Vec::new()).write(&path).unwrap();
+        Cache::new("dev".into(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()).write(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "mine");
         assert!(!std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
         assert!(std::fs::read_to_string(&path).unwrap().contains("\"source\":\"collin\""));

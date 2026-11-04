@@ -232,6 +232,9 @@ fn describe(seen: &Seen) -> Value {
         "roots": r.roots.iter().map(|root| &root.column).collect::<Vec<_>>(),
         "lost_outputs": lost,
         "lost_ends": lost_ends,
+        // What the walk gave up on in a column that kept an edge, as the engine
+        // gave it; `published_partial` is what the plan let into the cache.
+        "partial": r.partial.iter().map(|p| json!({"output": p.output, "reason": p.reason.as_str(), "name": p.name})).collect::<Vec<_>>(),
         "unbacked": r.unbacked.iter().map(|u| json!({"output": u.output, "cte": u.cte, "column": u.column, "owners": u.owners})).collect::<Vec<_>>(),
         "unknown_columns": r.unknown_columns.iter().map(|u| json!({"relation": u.relation, "column": u.column})).collect::<Vec<_>>(),
         "merged_scopes": r.merged_scopes.iter().map(|m| json!({"kind": m.kind, "name": m.name, "count": m.count})).collect::<Vec<_>>(),
@@ -247,6 +250,7 @@ fn describe(seen: &Seen) -> Value {
         "published_roots": seen.published_roots,
         "published_rules": seen.published_rules,
         "published_expressions": seen.published_expressions,
+        "published_partial": seen.published_partial,
     })
 }
 
