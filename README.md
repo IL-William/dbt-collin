@@ -288,11 +288,16 @@ in its table's order, the catalog's `index` or the parent's projection, since a
   the walk back from each stopped
   ([0017](docs/decisions/0017-a-column-with-no-lineage-is-named.md)); a column
   that has an edge and lost a name beside it is in `partial_columns` and in the
-  cache's `partial`, with the name and why
+  cache's `partial`, with the name and why. A column counts toward the model's
+  unclean state, the finding and `columns_partial` when it lost a name
+  (`name_unresolved`, `relation_unknown`, `window_key_unbound`); `steps_capped`
+  (the edges are all there) and `cte_lacks_name` (the unbacked read already says
+  it) are listed and not counted
   ([0051](docs/decisions/0051-a-column-with-an-edge-and-a-lost-name-is-partial.md)).
   Still not named: a bare name, which is never claimed because it cannot be
   told from a keyword, a date part or an alias; a part of a longer path
-  (a struct's field, a variant's key); a quoted name read in a text; a name
+  (a struct's field, a variant's key); a quoted name read in a text; a `VALUES` list's or a
+  `FLATTEN`'s columns; a name
   equal to a relation's last part; the names inside a subquery; the names of a clause-level
   placement (`unplaced_*`), of a scope merged under one name, and of a derived
   table or a union branch the engine drops before a node exists; and a name a

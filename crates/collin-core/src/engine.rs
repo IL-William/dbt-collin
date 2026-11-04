@@ -2380,6 +2380,12 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     // Every column name some relation has, and every relation's last name part:
     // what a qualified read is weighed against to be claimed as a column (0051).
     let anywhere: HashSet<String> = known.values().flatten().cloned().collect();
+    // Qualifiers that are not a relation with columns to lose: a column of some
+    // relation, which makes the name a field of it, a `VALUES` list or a
+    // `FLATTEN`, whose columns are literals and the engine's own.
+    let mut no_claim = anywhere.clone();
+    no_claim.extend(values.iter().cloned());
+    no_claim.extend(flattens.iter().cloned());
     let tables: HashSet<String> = out
         .reads
         .iter()
@@ -2474,6 +2480,10 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
             let mut keys: Vec<OrderingKey<'_>> = Vec::new();
             for (qualifier, name) in &o.keys {
                 let mut bound = false;
+                // A scope the engine gave no column for, as one that selects
+                // from a `VALUES` list: its columns are literals, not names
+                // that went missing.
+                let mut blind = false;
                 let mut owners: Vec<OrderingKey<'_>> = Vec::new();
                 for (source, alias) in &o.sources {
                     if let Some(q) = qualifier {
@@ -2486,6 +2496,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                     match ctes.get(source.trim_matches(&QUOTES[..])) {
                         Some(ids) if !source.contains('.') => {
                             let [cte] = ids.as_slice() else { return None };
+                            blind |= owned.get(cte).is_none_or(|c| c.is_empty());
                             let column = owned
                                 .get(cte)
                                 .into_iter()
@@ -2508,7 +2519,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                 // that lacks the column. A bare key is a column, a lateral
                 // alias or an argument (`day` in `dateadd(day, ...)`), and
                 // nothing here tells which.
-                if owners.is_empty() && qualifier.is_some() && bound {
+                if owners.is_empty() && qualifier.is_some() && bound && !blind {
                     unbound.push(name.clone());
                 }
                 keys.extend(owners);
@@ -2594,7 +2605,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                         }
                         // The names the list has are edges now; a qualified name
                         // it lacks is lost, unless another relation gave it.
-                        let lost: Vec<String> = claimable_tails(reading.unwrap_or_default(), &anywhere, &tables)
+                        let lost: Vec<String> = claimable_tails(reading.unwrap_or_default(), &no_claim, &tables)
                             .into_iter()
                             .filter(|n| !list.is_some_and(|l| l.contains(n)))
                             .collect();
@@ -2802,7 +2813,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                         },
                                     );
                                 }
-                                let lost: Vec<String> = claimable_tails(body, &anywhere, &tables)
+                                let lost: Vec<String> = claimable_tails(body, &no_claim, &tables)
                                     .into_iter()
                                     .filter(|n| !list.is_some_and(|l| l.contains(n)))
                                     .collect();
@@ -2827,11 +2838,11 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                         stack.push((next, true, text, Some(own), steps));
                                     }
                                 }
-                                let lost: Vec<String> = claimable_tails(body, &anywhere, &tables)
+                                let lost: Vec<String> = claimable_tails(body, &no_claim, &tables)
                                     .into_iter()
                                     .filter(|n| !names.contains(n))
                                     .collect();
-                                if !lost.is_empty() {
+                                if !lost.is_empty() && !names.is_empty() {
                                     pending.push(Pending {
                                         output: to_column.clone(),
                                         reason: Reason::WindowKeyUnbound,
@@ -3107,8 +3118,14 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
             // Another relation of the scope gave an edge for this name, and the
             // text hung off one relation can read the columns of the next.
             let got_elsewhere = |name: &String| {
+                // Not the output's own node: a column aliased like the name it
+                // lost has reached that name no more than any other.
+                let own = nodes_of.get(p.output.as_str());
                 reached.get(&p.output).is_some_and(|ids| {
-                    ids.iter().any(|id| by_id.get(id).is_some_and(|n| n.label.eq_ignore_ascii_case(name)))
+                    ids.iter().any(|id| {
+                        !own.is_some_and(|o| o.contains(id))
+                            && by_id.get(id).is_some_and(|n| n.label.eq_ignore_ascii_case(name))
+                    })
                 }) || edge_columns.get(p.output.as_str()).is_some_and(|c| c.contains(name.as_str()))
             };
             let names = p.names.iter().filter(|n| !(p.weigh && got_elsewhere(n)));
@@ -4996,6 +5013,14 @@ mod tests {
         assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
     }
 
+    /// A statement that parsed, has edges, and names nothing: the claim "no
+    /// entry" is empty if the SQL did not parse.
+    fn nothing_named(r: &Resolved) {
+        assert!(r.parse_error.is_none(), "{:?}", r.parse_error);
+        assert!(!r.edges.is_empty());
+        assert!(r.partial.is_empty(), "{:?}", partial_of(r));
+    }
+
     /// `a` has columns named after the date parts and the type that the SQL
     /// below spells, and an output is aliased `date` or `last`: a bare word is
     /// never claimed, whatever the statement holds by that name.
@@ -5029,12 +5054,12 @@ mod tests {
                 "snowflake",
                 &dated(),
             );
-            assert!(r.partial.is_empty(), "{key}: {:?}", partial_of(&r));
+            nothing_named(&r);
         }
         // And without a column of those names anywhere.
         for expr in ["dateadd(day, 1, a.x)", "a.x::date"] {
             let r = resolve(&format!("select {expr} as z from db.s.a a"), "snowflake", &[vis("DB.S.A", &["id", "x"])]);
-            assert!(r.partial.is_empty(), "{expr}: {:?}", partial_of(&r));
+            nothing_named(&r);
         }
     }
 
@@ -5046,7 +5071,7 @@ mod tests {
             "snowflake",
             &[vis("DB.S.A", &["id", "x"])],
         );
-        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        nothing_named(&r);
         // A bare key no source has is not claimed either: nothing tells it from
         // a function's argument.
         let r = resolve(
@@ -5054,7 +5079,7 @@ mod tests {
             "snowflake",
             &[vis("DB.S.A", &["id", "x"])],
         );
-        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        nothing_named(&r);
         // In the text fallback, `k` is not claimed while `b.w` is.
         let r = resolve(
             "select a.x * 2 as k, row_number() over (partition by id order by k, b.w) as z \
@@ -5083,14 +5108,14 @@ mod tests {
             "snowflake",
             &[vis("DB.S.A", &["id", "payload"]), vis("DB.S.B", &["id", "w"])],
         );
-        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        nothing_named(&r);
         let r = resolve(
             "select row_number() over (partition by id order by t.rec.field) as z \
              from db.s.a t join db.s.b b on t.id = b.id",
             "snowflake",
             &[vis("DB.S.A", &["id", "rec"]), vis("DB.S.B", &["id", "w"])],
         );
-        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        nothing_named(&r);
         let tails = |expr: &str| claimable_tails(expr, &HashSet::from(["rec".to_string()]), &HashSet::from(["t".to_string()]));
         assert_eq!(tails("o.amount + o.tax::int"), vec!["amount", "tax"]);
         assert!(tails("t.rec.field").is_empty() && tails("rec.field").is_empty());
@@ -5111,7 +5136,7 @@ mod tests {
              from db.s.a a join db.s.b b on a.id = b.id",
         ] {
             let r = resolve(sql, "snowflake", &known);
-            assert!(r.partial.is_empty(), "{sql}: {:?}", partial_of(&r));
+            nothing_named(&r);
         }
         let tails = |expr: &str| claimable_tails(expr, &HashSet::new(), &HashSet::new());
         assert_eq!(tails("a.x + (select max(c.v) from c where c.k = a.y) + b.w"), vec!["x", "w"]);
@@ -5129,18 +5154,53 @@ mod tests {
         assert_eq!(tails("a.x = 'voilà -> b' and e -> e.v"), vec!["x"]);
         for sql in [
             "select row_number() over (partition by a.id order by a.x) || 'х -> y' as z from db.s.a a",
-            "select row_number() over (partition by a.id order by b.w = 'voilà -> ok') as z \\
+            "select row_number() over (partition by a.id order by b.w = 'voilà -> ok') as z \
              from db.s.a a join db.s.b b on a.id = b.id",
         ] {
             let r = resolve(sql, "snowflake", &a_and_b());
-            assert!(r.partial.is_empty(), "{sql}: {:?}", partial_of(&r));
+            nothing_named(&r);
         }
         let r = resolve(
             "select array_size(filter(a.x, e -> e.v > 0)) as z from db.s.a a",
             "snowflake",
             &known,
         );
-        assert!(r.partial.is_empty(), "{:?}", partial_of(&r));
+        nothing_named(&r);
+    }
+
+    #[test]
+    fn a_key_read_from_a_values_list_is_a_literal_and_claims_nothing() {
+        for sql in [
+            "select row_number() over (partition by a.id order by v.n) + a.x as z \
+             from db.s.a a join (values (1, 2)) as v(id, n) on a.id = v.id",
+            "with v as (select * from (values (1, 2)) as t(id, n)) \
+             select row_number() over (partition by a.id order by v.n) + a.x as z \
+             from db.s.a a join v on a.id = v.id",
+        ] {
+            let r = resolve(sql, "snowflake", &[vis("DB.S.A", &["id", "x"])]);
+            nothing_named(&r);
+        }
+    }
+
+    #[test]
+    fn a_lost_name_is_named_even_when_the_column_is_aliased_like_it() {
+        // The output's own node is not a column the walk reached the name by.
+        let r = resolve(
+            "select row_number() over (partition by id order by b.w) as w \
+             from db.s.a a join db.s.b b on a.id = b.id",
+            "snowflake",
+            &a_and_b(),
+        );
+        assert!(!r.edges.is_empty());
+        assert_eq!(partial_of(&r), vec![("w", "name_unresolved", "w")]);
+        let r = resolve(
+            "with c as (select id, x from db.s.a), d as (select id, y from db.s.a) \
+             select row_number() over (partition by id order by c.nope) + c.x as nope \
+             from c join d on c.id = d.id",
+            "snowflake",
+            &[vis("DB.S.A", &["id", "x"])],
+        );
+        assert_eq!(partial_of(&r), vec![("nope", "window_key_unbound", "nope")]);
     }
 
     #[test]

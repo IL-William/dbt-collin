@@ -546,7 +546,7 @@ pub fn run_observed(
         };
         rep.totals.columns_lost += lost.len();
         let partial_columns = partial_columns(&published.partial);
-        rep.totals.columns_partial += partial_columns.len();
+        rep.totals.columns_partial += partial_columns.iter().filter(|c| c.has_loss()).count();
         let unbacked = unbacked_report(&resolved);
         rep.totals.unbacked_reads += unbacked.len();
         if !resolved.merged_scopes.is_empty() {
@@ -670,7 +670,7 @@ pub fn run_observed(
             && !stale
             && !gap
             && lost.is_empty()
-            && partial_columns.is_empty()
+            && !partial_columns.iter().any(PartialColumn::has_loss)
             && unbacked.is_empty()
             && !unexplained
             // Its columns are counted apart from the roots and named nowhere
@@ -3643,6 +3643,22 @@ mod tests {
             // out of the cache.
             assert_eq!(engine_side, 1, "{sql}");
         }
+    }
+
+    #[test]
+    fn a_capped_count_is_in_the_cache_and_does_not_make_a_model_unclean() {
+        // The edges are all there: only the count of expressions is cut at 32.
+        let r = ruled(
+            "with recursive t as (select r.id as n from db.sch.raw r union all select n + 1 from t where n < 5) \
+             select n from t",
+            &["n"],
+            false,
+        );
+        assert_eq!(partial_of(&r), vec![("model.p.m", "n", "steps_capped", "n")]);
+        assert!(r.edges.iter().any(|e| e.to_col == "n" && e.from_col == "id"));
+        assert!(r.report.models.is_empty(), "{:?}", r.report.models.len());
+        assert_eq!(r.report.totals.columns_partial, 0);
+        assert!(crate::findings::of(&r.report).is_empty());
     }
 
     #[test]

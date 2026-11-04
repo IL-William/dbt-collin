@@ -60,7 +60,9 @@ there. The reasons are:
   without its qualifier, or a bare name in a text, that a relation lacks is not
   named. A quoted name read in a text (`b."NOPE"`) is never claimed, though as
   a key it is. A name equal to the last part of a relation's name is never
-  claimed. A subquery's own names are never claimed. A qualifier named like any
+  claimed. A subquery's own names are never claimed. A qualifier that names a
+  `VALUES` list or a `FLATTEN` is not claimed, nor is a key of a scope the engine
+  gave no column for: their columns are literals, not names that went missing. A qualifier named like any
   lambda parameter of the same text is passed over, wherever it is written:
   `filter(a.arr, a -> a.v > 0), a.nope` loses `a.nope` too. The record errs towards
   silence and never towards a claim it cannot back.
@@ -84,14 +86,18 @@ there. The reasons are:
 ### Where it shows
 
 - **The cache**: `partial`, as above.
-- **The report**: `partial_columns` on a model's entry, each column once with its
-  `gaps` (a reason and a name), `columns_partial` in the totals, and a finding,
-  `lineage_collin_partial`, owner collin, worded as `lineage_collin_lost` is
-  (0040) and true of both kinds: a name dropped, or an expression chain cut at 32.
-  It leaves out `cte_lacks_name`, which the project finding
-  `reads_a_name_its_cte_lacks` already says and which the project is to fix; the
-  entry stays in the cache and in `partial_columns`. A model with a partial column is in `models`, and so is not read as
-  clean.
+- **The report**: `partial_columns` on a model's entry, each column once with
+  all its `gaps` (a reason and a name); and, counting only some of them,
+  `columns_partial` in the totals, the finding `lineage_collin_partial` (owner
+  collin, worded as `lineage_collin_lost` is, 0040) and the clean gate. One
+  predicate says which: a gap counts when it is a name lost, `name_unresolved`,
+  `relation_unknown` or `window_key_unbound`. `steps_capped` does not, the edges
+  being all there, so a model with only that is clean as on 0.11.0, and the
+  entry is in the cache and in `partial_columns` all the same. `cte_lacks_name`
+  does not, the unbacked read already keeps the model out of clean and the
+  project finding `reads_a_name_its_cte_lacks` speaks for it. So the total, the
+  finding, the CLI line and the gate agree. A model with a column that counts is
+  in `models`, and so is not read as clean.
 - **The CLI** prints `N columns of trusted models partly traced, named in the
   report` beside the line for the lost ones, when there are any.
 - **`examples/dump.rs`** writes the engine's list as `partial` and the cache's
@@ -120,8 +126,9 @@ expected caches do not move. Jaffle Shop has 0 entries and Shopify has 0, for
 each of the five reasons, and lineage-library's 221 facts raise none. The shapes
 that give one are in the tests, each reason by one.
 
-dbt-edith reading the list is its own change. Until then it skips `partial`, as
-it skips `roots`, `rules` and `expressions`. What it would do with it: show
+dbt-edith reading the list is its own change. It reads `roots`, `rules` and
+`expressions` and ignores a field it does not know, so it skips `partial` until
+its own change reads it. What it would do with it: show
 `(partial: name)` in the compact `from` of such a column, add a count to the
 `column lineage:` line on its stderr, mark the column on the canvas, and give the
 skill a cue beside the ones for `(cut)` and `32+`: a partial column means collin

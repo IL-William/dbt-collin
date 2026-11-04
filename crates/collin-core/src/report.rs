@@ -202,8 +202,9 @@ pub struct Totals {
     /// Output columns of trusted models that came out with no edge and are not
     /// built from literals. See `ModelReport::lost_columns`.
     pub columns_lost: usize,
-    /// Output columns of trusted models that have an edge and were not traced
-    /// whole, once each. See `ModelReport::partial_columns`.
+    /// Output columns of trusted models that have an edge and lost a name the
+    /// walk could not follow, once each: the columns with a gap that
+    /// `PartialGap::is_loss` counts. See `ModelReport::partial_columns`.
     pub columns_partial: usize,
     /// Models whose SQL gives one name to two scopes. See
     /// `ModelReport::merged_scopes`.
@@ -320,6 +321,10 @@ pub struct ModelReport {
     /// the edges are all there), with why. The edges such a column has stand;
     /// what it lacks is named here so that it is not taken for complete (0051).
     ///
+    /// All of them are listed. Only a column with a gap that `PartialGap::is_loss`
+    /// counts makes the model unclean, raises the finding and is counted in
+    /// `totals.columns_partial`.
+    ///
     /// Only for a compile the plan trusted, as `lost_columns`, and for the
     /// columns the plan trusts it for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -414,6 +419,24 @@ pub struct PartialGap {
     /// `window_key_unbound` or `steps_capped`.
     pub reason: &'static str,
     pub name: String,
+}
+
+impl PartialGap {
+    /// Whether the gap is a name lost that nothing else in the report says: the
+    /// one predicate the clean gate, the finding and the total share, so that
+    /// their numbers agree. `steps_capped` is not one, the edges being all
+    /// there. `cte_lacks_name` is not either: the unbacked read already keeps
+    /// the model out of clean, and the project finding for it speaks.
+    pub fn is_loss(&self) -> bool {
+        matches!(self.reason, "name_unresolved" | "relation_unknown" | "window_key_unbound")
+    }
+}
+
+impl PartialColumn {
+    /// The column has a gap `PartialGap::is_loss` counts.
+    pub fn has_loss(&self) -> bool {
+        self.gaps.iter().any(PartialGap::is_loss)
+    }
 }
 
 /// Where the walk back from a lost column stopped.

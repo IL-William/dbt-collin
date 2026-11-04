@@ -283,13 +283,12 @@ pub fn of(report: &Report) -> Vec<Finding> {
         one: "model has columns collin traced only in part",
         many: "models have columns collin traced only in part",
         why: "The SQL is trusted, and these columns have edges, but not all of what they are: \
-              either their expression reads a qualified name or a window key that collin did not \
-              follow (the edge for it is missing), or the chain of expressions that computes them \
-              is longer than the 32 the cache counts (`steps_capped`; the edges are all there). \
-              Each says which and why.",
-        action: "Nothing to fix in the project. For a name listed, read the model's SQL: the edges \
-                 alone are not all of the column. For `steps_capped`, the edges are all there and \
-                 only the count of expressions is cut. Worth reporting to collin when the SQL is \
+              their expression reads a qualified name or a window key that collin did not follow, \
+              so the edge for it is missing. Each says which name and why. A cut count of \
+              expressions (`steps_capped`, edges all there) and a name a CTE lacks (a project \
+              finding of its own) are in the report's entry and not counted here.",
+        action: "Nothing to fix in the project. Read the model's SQL for the names listed: the \
+                 edges alone are not all of the column. Worth reporting to collin when the SQL is \
                  ordinary.",
         pick: |m| some_list(m.partial_columns.iter().filter_map(partial_detail)),
         columns: |m| m.partial_columns.iter().filter_map(partial_detail).count(),
@@ -346,12 +345,11 @@ fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// A partial column as the finding words it, or none when every gap of it is a
-/// read of a name a CTE lacks: the project finding `reads_a_name_its_cte_lacks`
-/// says that one, and it is the project's to fix.
+/// A partial column as the finding words it, or none when it has no gap that
+/// `PartialGap::is_loss` counts.
 fn partial_detail(p: &crate::report::PartialColumn) -> Option<String> {
     let gaps: Vec<String> =
-        p.gaps.iter().filter(|g| g.reason != "cte_lacks_name").map(|g| format!("{} {}", g.reason, g.name)).collect();
+        p.gaps.iter().filter(|g| g.is_loss()).map(|g| format!("{} {}", g.reason, g.name)).collect();
     (!gaps.is_empty()).then(|| format!("{} ({})", p.column, gaps.join(", ")))
 }
 
@@ -496,18 +494,19 @@ mod tests {
                 gaps: vec![
                     PartialGap { reason: "cte_lacks_name", name: "c".into() },
                     PartialGap { reason: "steps_capped", name: "n".into() },
+                    PartialGap { reason: "name_unresolved", name: "w".into() },
                 ],
             },
         ];
         let found = of(&Report { models: vec![m], ..Default::default() });
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].columns, 1);
-        assert_eq!(found[0].models[0].detail, "b (steps_capped n)");
+        assert_eq!(found[0].models[0].detail, "b (name_unresolved w)");
         let mut only = model("only");
-        only.partial_columns = vec![PartialColumn {
-            column: "a".into(),
-            gaps: vec![PartialGap { reason: "cte_lacks_name", name: "c".into() }],
-        }];
+        only.partial_columns = vec![
+            PartialColumn { column: "a".into(), gaps: vec![PartialGap { reason: "cte_lacks_name", name: "c".into() }] },
+            PartialColumn { column: "n".into(), gaps: vec![PartialGap { reason: "steps_capped", name: "n".into() }] },
+        ];
         assert!(of(&Report { models: vec![only], ..Default::default() }).is_empty());
     }
 
