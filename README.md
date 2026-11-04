@@ -296,8 +296,9 @@ in its table's order, the catalog's `index` or the parent's projection, since a
   ([0051](docs/decisions/0051-a-column-with-an-edge-and-a-lost-name-is-partial.md)).
   Still not named: a bare name, which is never claimed because it cannot be
   told from a keyword, a date part or an alias; a part of a longer path
-  (a struct's field, a variant's key); a quoted name read in a text; a `VALUES` list's or a
-  `FLATTEN`'s columns; a name
+  (a struct's field, a variant's key); a quoted name read in a text; a column
+  read through a qualifier that is itself the alias of a `VALUES` list or of a
+  `lateral flatten`; a name
   equal to a relation's last part; the names inside a subquery; the names of a clause-level
   placement (`unplaced_*`), of a scope merged under one name, and of a derived
   table or a union branch the engine drops before a node exists; and a name a

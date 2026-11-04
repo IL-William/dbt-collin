@@ -60,9 +60,11 @@ there. The reasons are:
   without its qualifier, or a bare name in a text, that a relation lacks is not
   named. A quoted name read in a text (`b."NOPE"`) is never claimed, though as
   a key it is. A name equal to the last part of a relation's name is never
-  claimed. A subquery's own names are never claimed. A qualifier that names a
-  `VALUES` list or a `FLATTEN` is not claimed, nor is a key of a scope the engine
-  gave no column for: their columns are literals, not names that went missing. A qualifier named like any
+  claimed. A subquery's own names are never claimed. A qualifier that is itself
+  the alias of a `VALUES` list or of a `lateral flatten` is never claimed, nor is
+  a key of a scope the engine gave no column for: their columns are literals,
+  not names that went missing. A literal source one level down is not covered
+  (see Consequences). A qualifier named like any
   lambda parameter of the same text is passed over, wherever it is written:
   `filter(a.arr, a -> a.v > 0), a.nope` loses `a.nope` too. The record errs towards
   silence and never towards a claim it cannot back.
@@ -144,6 +146,15 @@ A reason pair can name one name twice. A key `w` of a window over a join, read
 by its qualifier in a `SELECT` whose source lacks it and by its text against a
 relation with no list, is `window_key_unbound` and `relation_unknown` both. Each is true of its relation,
 and the entries are not merged.
+
+Two residuals are known, both in `docs/next-steps.md`. A literal source one
+level down, a CTE or a derived table over a `VALUES` list or over literal
+selects, or the alias of a `table(flatten(..))`, can still be named
+`window_key_unbound` when a bare key is ambiguous between two tables. That is a
+false entry on the safe side: it only asks a reader to read the SQL, and
+never hides an edge. And the guard that a CTE scope's window text claims a
+name only when the CTE has columns (`!names.is_empty()` in `engine.rs`) has
+no test reaching it; it stays.
 
 ## Rejected
 

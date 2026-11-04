@@ -203,6 +203,15 @@ order their columns differently, read exactly since 0044, and
   known file is not regenerated with this change, and wait for a shape the
   library holds that the pass names. The regeneration is a pull request to
   lineage-library and one here.
+- **A literal source one level down can be named partial** (0051): only a
+  qualifier that is itself a `VALUES` alias or a `lateral flatten` alias is
+  never claimed. A CTE or a derived table over a `VALUES` list or over literal
+  selects, or the alias of a `table(flatten(..))`, can still give
+  `window_key_unbound` when a bare key is ambiguous between two tables. A false
+  entry on the safe side: it asks for the SQL to be read and hides no edge.
+- **One guard of 0051 has no test**: the window text of a CTE scope claims a
+  name only when the CTE has columns (`!names.is_empty()` in `engine.rs`), and
+  no test reaches the case where it has none. The guard stays.
 - **A join inside a parenthesised join gives no rule** (0050): in `r join (c
   join o on c.id = o.cid) on r.cid = c.id` the inner `ON` is not read, and the
   outer rule lists only `raw.cid`, since `c` sits inside the parenthesised join.
