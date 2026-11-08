@@ -57,6 +57,7 @@ is built this way, for whoever changes it next.
 | [0049](0049-a-correlated-name-is-read-where-its-qualifier-is-defined.md) | A correlated name is read where its qualifier is defined | changing which sources a `WHERE` or a `HAVING` binds its names to, or what a nested query is allowed to see of the one around it |
 | [0050](0050-a-model-s-rules-and-a-column-s-expression-go-in-the-cache.md) | A model's rules and a column's expression go in the cache | changing what `Rule` or `Expression` carry, adding a list to the cache, or reading a predicate or an expression text out of the engine |
 | [0051](0051-a-column-with-an-edge-and-a-lost-name-is-partial.md) | A column with an edge and a lost name is partial | changing what the walk records where it gives up on a name, adding a reason to `Partial`, or deciding how a column that kept an edge and lost another is called |
+| [0052](0052-a-release-is-checked-on-virustotal-before-it-is-published.md) | A release is checked on VirusTotal before it is published | changing what the release workflow does between the build and the publication, the `VIRUSTOTAL_API_KEY` secret, or the override that publishes a flagged release |
 
 ## The other side of the boundary
 
