@@ -6,6 +6,16 @@ name: release
 # together at the commit that was built (0035). The notes list the pull
 # requests merged since the previous release.
 #
+# Before the tag exists, the Windows archive is sent to VirusTotal, and a flag
+# from any engine stops the release (0052). A release cannot be changed once it
+# is out, so the check has to be on the file the release job uploads and before
+# it runs. The Linux and macOS archives are not sent: the Windows .zip is what
+# runs on the Windows machines where that engine sits, and dbt-edith's binary
+# is the one it flagged there. A run by hand with the box ticked
+# publishes anyway. After an outage or an analysis that was slow, "Re-run
+# failed jobs" scans the same artifact again and uploads nothing VirusTotal
+# already has.
+#
 # The tag is made here rather than pushed by hand: a tag pushed with this
 # workflow's token would start no workflow, and one pushed by hand is a step
 # that gets forgotten.
@@ -23,8 +33,13 @@ on:
   pull_request:
     paths: [Cargo.toml, ".github/workflows/release.yml"]
   # A release that failed on something outside this repository, retried on
-  # main as it is.
+  # main as it is, or one a VirusTotal flag blocked and that is published anyway.
   workflow_dispatch:
+    inputs:
+      publish_even_if_flagged:
+        description: Publish even if a VirusTotal engine flags the file
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -135,9 +150,188 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The Windows archive as the release job will upload it, sent to VirusTotal
+  # (0052). Only a release that is due is checked: a pull request's build is not
+  # the file that ships, and the verdicts of near-identical builds can differ. A
+  # flag by any engine fails this job and so blocks the release, unless the run
+  # was started by hand with the override ticked. A file VirusTotal already has
+  # is not sent again, so "Re-run failed jobs" after an outage or an analysis
+  # that was slow looks at the same artifact and reads the same report.
+  virustotal:
+    needs: [version, build]
+    if: needs.version.outputs.due == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: x86_64-pc-windows-msvc
+          path: dist
+      # No sha256sum -c here: collin writes SHA256SUMS in the release job, so
+      # no per-file .sha256 exists before it to check the download against.
+      # The free key allows 4 requests a minute: every call waits 15 s first, and
+      # a 429 waits a minute and asks again. The key is only ever in the header
+      # file curl reads, and nothing here prints it.
+      - name: Scan it on VirusTotal
+        env:
+          VT_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+          # Empty on a push, which counts as false.
+          FORCE: ${{ inputs.publish_even_if_flagged }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$VT_KEY" ]; then
+            echo "::error::The VIRUSTOTAL_API_KEY repository secret is not set, so no release can be checked or published. Add it under Settings, Secrets and variables, Actions."
+            exit 1
+          fi
+          api=https://www.virustotal.com/api/v3
+          work=$RUNNER_TEMP/vt
+          mkdir -p "$work"
+          body=$work/body.json
+          (umask 077; printf 'x-apikey: %s\n' "$VT_KEY" > "$work/header")
+
+          # vt METHOD PATH [curl args]: prints the HTTP code, the body is in $body.
+          vt() {
+            local method=$1 path=$2 try code
+            shift 2
+            for try in 1 2 3 4 5; do
+              sleep 15
+              rm -f "$body"
+              code=$(curl -sS --proto =https -X "$method" -H "@$work/header" \
+                -o "$body" -w '%{http_code}' "$@" "$api$path") || code=000
+              if [ "$code" != 429 ]; then
+                echo "$code"
+                return 0
+              fi
+              [ "$try" -lt 5 ] && sleep 60
+            done
+            echo 429
+          }
+          # unexpected WHAT CODE: the status and VirusTotal's own error code.
+          unexpected() {
+            local why
+            why=$(jq -r '.error.code // empty | gsub("[^A-Za-z0-9]"; "")' "$body" 2>/dev/null || true)
+            echo "::error::VirusTotal answered $2 to $1 (${why:-no error code})."
+            exit 1
+          }
+          # has_results FILE: whether a report holds the engines' verdicts.
+          has_results() {
+            [ "$(jq '(.data.attributes.last_analysis_results // {}) | length' "$1")" -gt 0 ]
+          }
+
+          files=("collin-v$VERSION-x86_64-pc-windows-msvc.zip")
+          shas=()
+          ids=()
+          for i in "${!files[@]}"; do
+            file=${files[$i]}
+            sha=$(sha256sum "dist/$file" | cut -d' ' -f1)
+            shas[$i]=$sha
+            ids[$i]=
+            rm -f "$work/$i.json"
+            code=$(vt GET "/files/$sha")
+            case "$code" in
+              200) cp "$body" "$work/$i.json" ;;
+              404) ;;
+              *) unexpected "the lookup of $file" "$code" ;;
+            esac
+            if [ ! -f "$work/$i.json" ]; then
+              code=$(vt POST /files -F "file=@dist/$file")
+              [ "$code" = 200 ] || unexpected "the upload of $file" "$code"
+              ids[$i]=$(jq -r '.data.id' "$body")
+              echo "$file sent"
+            elif has_results "$work/$i.json"; then
+              echo "$file is already known"
+            else
+              echo "$file is known, its analysis is not finished"
+            fi
+          done
+
+          deadline=$((SECONDS + 1800))
+          for i in "${!files[@]}"; do
+            file=${files[$i]}
+            sha=${shas[$i]}
+            while ! { [ -f "$work/$i.json" ] && has_results "$work/$i.json"; }; do
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::error::The analysis of $file did not finish; re-run the failed jobs."
+                exit 1
+              fi
+              if [ -n "${ids[$i]}" ]; then
+                # Sent by this run: the analysis says when the report is whole.
+                code=$(vt GET "/analyses/${ids[$i]}")
+                [ "$code" = 200 ] || unexpected "the analysis of $file" "$code"
+                if [ "$(jq -r '.data.attributes.status' "$body")" = completed ]; then
+                  code=$(vt GET "/files/$sha")
+                  [ "$code" = 200 ] || unexpected "the report of $file" "$code"
+                  cp "$body" "$work/$i.json"
+                  if has_results "$work/$i.json"; then
+                    break
+                  fi
+                  # Completed but still empty: ask the file's report, as for one
+                  # sent by an earlier run, until the deadline.
+                  ids[$i]=
+                fi
+              else
+                # Sent by an earlier run: the file's own report fills in.
+                code=$(vt GET "/files/$sha")
+                [ "$code" = 200 ] || unexpected "the report of $file" "$code"
+                cp "$body" "$work/$i.json"
+              fi
+              sleep 60
+            done
+          done
+
+          # Flagged is malicious plus suspicious. Engine names and verdicts come
+          # from VirusTotal, so only plain characters are kept of them before they
+          # reach a log command or the summary.
+          defs='def clean: gsub("[^A-Za-z0-9 ._:/!()+,-]"; "");
+                def hit: select(.category == "malicious" or .category == "suspicious");'
+          flagged_any=false
+          blocked=
+          {
+            echo "### VirusTotal"
+            echo
+            echo "| File | SHA-256 | Flagged / engines | Report |"
+            echo "| --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          : > "$work/details.md"
+          for i in "${!files[@]}"; do
+            file=${files[$i]}
+            sha=${shas[$i]}
+            report=$work/$i.json
+            flagged=$(jq '(.data.attributes.last_analysis_stats.malicious // 0) + (.data.attributes.last_analysis_stats.suspicious // 0)' "$report")
+            engines=$(jq '.data.attributes.last_analysis_results | length' "$report")
+            echo "| \`$file\` | \`$sha\` | $flagged / $engines | [report](https://www.virustotal.com/gui/file/$sha) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "$file: $flagged of $engines engines flag it"
+            if [ "$flagged" -gt 0 ]; then
+              flagged_any=true
+              jq -r --arg f "$file" "$defs"'
+                .data.attributes.last_analysis_results[] | hit
+                | "- `\($f)`: \(.engine_name | clean): `\((.result // .category) | clean)`"' \
+                "$report" >> "$work/details.md"
+              names=$(jq -r "$defs"'
+                [.data.attributes.last_analysis_results[] | hit | .engine_name | clean]
+                | unique | join(", ")' "$report")
+              blocked="${blocked:+$blocked; }$file ($names)"
+            fi
+          done
+          if [ -s "$work/details.md" ]; then
+            { echo; cat "$work/details.md"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$flagged_any" = true ]; then
+            if [ "$FORCE" = true ]; then
+              echo "::warning::VirusTotal flagged $blocked. Published anyway, as the run asked."
+              exit 0
+            fi
+            echo "::error::The release was not published: VirusTotal flagged $blocked. To publish anyway, run the release workflow by hand on main with \"Publish even if a VirusTotal engine flags the file\" ticked; it builds again and checks the new file."
+            exit 1
+          fi
+
   # Only this job can write, and only on main with a version still untagged.
   release:
-    needs: [version, build]
+    needs: [version, build, virustotal]
     if: needs.version.outputs.due == 'true'
     runs-on: ubuntu-latest
     permissions:
