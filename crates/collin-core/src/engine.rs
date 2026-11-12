@@ -2566,7 +2566,8 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         // wrote it, and the loudest text can come from a scope further out,
         // whose names are another scope's columns.
         // The fifth is the expressions met so far (`RawEdge::steps`).
-        let mut stack: Vec<(&str, bool, Option<&str>, Option<&str>, u32)> =
+        type Step<'a> = (&'a str, bool, Option<&'a str>, Option<&'a str>, u32);
+        let mut stack: Vec<Step<'_>> =
             vec![(&col.id, false, col.expression.as_deref(), col.expression.as_deref(), 0)];
         // Keyed by the whole state, so that a node two paths reach is read for
         // each text and weighed for each role: the first path to arrive must
@@ -2575,7 +2576,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         // the longest count reaches the edge. The states are finite because the
         // texts are the engine's and the count stops at `MAX_STEPS`: a recursive
         // CTE ends by that ceiling, one more lap giving a new state until then.
-        let mut visited: HashSet<(&str, bool, Option<&str>, Option<&str>, u32)> = HashSet::new();
+        let mut visited: HashSet<Step<'_>> = HashSet::new();
         let gave_up_before = pending.len();
         while let Some((id, derived, expr, reading, steps)) = stack.pop() {
             if !visited.insert((id, derived, expr, reading, steps)) {

@@ -8,7 +8,12 @@ cache. It reads a project, it never runs dbt and never reaches a warehouse.
 ```
 git submodule update --init      # once: fixtures/lineage-library
 cargo test
+cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
+
+Any Clippy lint fails; one that is wrong for a place is allowed there with a
+one-line reason, and an allow for the whole workspace needs a record of its own
+(0054).
 
 It reads two public projects end to end, dbt's Jaffle Shop and Fivetran's
 Shopify package, from the manifest and catalog dbt wrote, against the caches

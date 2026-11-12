@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "Column-level lineage for dbt projects, derived from compiled SQL"
 
+[lints]
+workspace = true
+
 [dependencies]
 flowscope-core.workspace = true
 sqlparser.workspace = true
