@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "CLI for collin"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "collin"
 path = "src/main.rs"

@@ -18,3 +18,7 @@ flowscope-core = { git = "https://github.com/IL-William/flowscope", rev = "b9043
 sqlparser = { version = "0.61", features = ["visitor"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Clippy runs with -D warnings in CI (0054). No lint is allowed for the whole
+# workspace: a lint that is wrong for one place is allowed there, with its reason.
+[workspace.lints.clippy]

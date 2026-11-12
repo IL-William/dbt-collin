@@ -430,7 +430,8 @@ mod tests {
         let named = |f: &Finding| -> Vec<(String, String)> {
             f.models.iter().map(|m| (m.name.clone(), m.detail.clone())).collect()
         };
-        let shape: Vec<(&str, &str, Vec<(String, String)>)> =
+        type Shape<'a> = (&'a str, &'a str, Vec<(String, String)>);
+        let shape: Vec<Shape<'_>> =
             found.iter().map(|f| (f.category, f.owner, named(f))).collect();
         let pair = |name: &str, detail: &str| (name.to_string(), detail.to_string());
         assert_eq!(

@@ -11,8 +11,8 @@
 //!
 //! 1. `parsed`     the edge was read out of the SQL, and carries its role.
 //! 2. `inferred`   the compile was degraded, so the edge comes from matching
-//!                 known output columns against known parent columns. The role
-//!                 is not claimed, because it was not observed.
+//!    known output columns against known parent columns. The role
+//!    is not claimed, because it was not observed.
 //! 3. unresolved   nothing could be said. The report names what was missing.
 //!
 //! One model's columns can stand on different rungs, one edge never on two: a
@@ -1339,7 +1339,8 @@ fn rules_of(
     resolved: &engine::Resolved,
 ) -> Vec<cache::Rule> {
     let own = norm_relation(&model.relation);
-    let mut seen: HashSet<(&str, &str, Vec<(String, String)>)> = HashSet::new();
+    type Columns = Vec<(String, String)>;
+    let mut seen: HashSet<(&str, &str, Columns)> = HashSet::new();
     let mut out = Vec::new();
     for r in &resolved.rules {
         let mut columns: Vec<(String, String)> = Vec::new();
@@ -2200,7 +2201,8 @@ mod tests {
 
     #[test]
     fn each_clause_gives_a_rule_with_the_columns_its_names_resolve_to() {
-        let cases: [(&str, &[&str], (&str, &str, Vec<&str>)); 5] = [
+        type Rule<'a> = (&'a str, &'a str, Vec<&'a str>);
+        let cases: [(&str, &[&str], Rule<'_>); 5] = [
             ("select id from db.sch.raw where status <> 'cancelled'", &["id"], ("WHERE", "status <> 'cancelled'", vec!["raw.status"])),
             (
                 "select status, count(*) as n from db.sch.raw group by status having count(*) > 1 and status <> 'x'",
