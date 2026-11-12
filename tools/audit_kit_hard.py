@@ -2,7 +2,12 @@
 
 usage: python3 -I audit_kit_hard.py MANIFEST DUMP_DIR OUT_DIR SEED
 """
-import json, os, random, sys, re, collections
+import collections
+import json
+import os
+import random
+import re
+import sys
 manifest, dump_dir, out, seed = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 m = json.load(open(manifest))
 nodes = {**m["nodes"], **m["sources"]}
