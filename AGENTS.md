@@ -7,9 +7,13 @@ cache. It reads a project, it never runs dbt and never reaches a warehouse.
 
 ```
 git submodule update --init      # once: fixtures/lineage-library
+cargo fmt --check
 cargo test
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
+
+Run `cargo fmt` first: the code is formatted by `rustfmt.toml` (0055), and
+`cargo fmt --check` fails on a file that is not.
 
 Any Clippy lint fails; one that is wrong for a place is allowed there with a
 one-line reason, and an allow for the whole workspace needs a record of its own
@@ -102,8 +106,10 @@ pinned by `rev` in `Cargo.toml` (0028).
   `[patch."https://github.com/IL-William/flowscope"]` pointing at a checkout
   of a `master` based branch. The crate's version must match, or cargo
   ignores the patch with a warning. Never commit it (0028).
-- **The fork is formatted with rustfmt; collin is not.** Never run `cargo fmt`
-  here: it would rewrite the whole tree.
+- **The fork has its own formatting; collin is formatted by its own
+  `rustfmt.toml`** (0055). Run `cargo fmt` before `cargo test`, and never
+  resolve a conflict in formatted code by hand: take one side of the file and
+  run `cargo fmt` again.
 - **Nothing goes upstream** without the owner's say.
 
 ## lineage-library

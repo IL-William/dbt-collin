@@ -157,12 +157,7 @@ pub struct Partial {
 
 impl Cache {
     pub fn new(
-        target: String,
-        edges: Vec<Edge>,
-        roots: Vec<Root>,
-        rules: Vec<Rule>,
-        expressions: Vec<Expression>,
-        partial: Vec<Partial>,
+        target: String, edges: Vec<Edge>, roots: Vec<Root>, rules: Vec<Rule>, expressions: Vec<Expression>, partial: Vec<Partial>,
     ) -> Cache {
         Cache {
             version: VERSION,
@@ -194,10 +189,7 @@ pub fn producer() -> String {
 /// RFC 3339 in UTC, computed from the epoch rather than pulled from a date
 /// crate: one timestamp is not worth a dependency.
 pub fn now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
     // Civil date from a day count, Howard Hinnant's algorithm.

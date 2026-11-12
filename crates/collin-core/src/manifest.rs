@@ -246,10 +246,7 @@ pub(crate) const QUOTES: [char; 2] = ['"', '`'];
 /// Uppercase and strip quotes, so a name from dbt, one from the catalog and one
 /// from the SQL engine compare equal.
 pub fn norm_relation(rel: &str) -> String {
-    rel.split('.')
-        .map(|p| p.trim().trim_matches(&QUOTES[..]).to_uppercase())
-        .collect::<Vec<_>>()
-        .join(".")
+    rel.split('.').map(|p| p.trim().trim_matches(&QUOTES[..]).to_uppercase()).collect::<Vec<_>>().join(".")
 }
 
 impl Project {
@@ -273,12 +270,8 @@ impl Project {
                 claims.entry(norm_relation(&relation)).or_default().push(uid.clone());
             }
             let mut seen = std::collections::HashSet::new();
-            let declared: Vec<String> = n
-                .columns
-                .iter()
-                .map(|c| c.name.to_lowercase())
-                .filter(|s| !s.is_empty() && seen.insert(s.clone()))
-                .collect();
+            let declared: Vec<String> =
+                n.columns.iter().map(|c| c.name.to_lowercase()).filter(|s| !s.is_empty() && seen.insert(s.clone())).collect();
             nodes.insert(
                 uid.clone(),
                 Node {
@@ -385,8 +378,7 @@ mod tests {
     fn a_yaml_s_columns_keep_the_order_it_writes_them_in() {
         // A star over a parent known only by its YAML expands to this order.
         let node = |columns: &str| -> RawNode {
-            serde_json::from_str(&format!(r#"{{"name": "m", "resource_type": "model", "columns": {columns}}}"#))
-                .unwrap()
+            serde_json::from_str(&format!(r#"{{"name": "m", "resource_type": "model", "columns": {columns}}}"#)).unwrap()
         };
         let names = |n: RawNode| n.columns.into_iter().map(|c| c.name).collect::<Vec<_>>();
         assert_eq!(names(node(r#"{"zeta": {"name": "zeta"}, "alpha": {"name": "alpha"}}"#)), vec!["zeta", "alpha"]);

@@ -496,11 +496,7 @@ impl Report {
         self.totals.catalog_elsewhere = elsewhere.len();
         self.catalog_elsewhere = elsewhere
             .into_iter()
-            .map(|e| CatalogElsewhere {
-                unique_id: e.unique_id,
-                relation: e.relation,
-                catalog_relation: e.catalog_relation,
-            })
+            .map(|e| CatalogElsewhere { unique_id: e.unique_id, relation: e.relation, catalog_relation: e.catalog_relation })
             .collect();
     }
 
@@ -601,12 +597,7 @@ mod tests {
             row_deciding_reads: vec![ModelReads {
                 name: "m".into(),
                 unique_id: "model.p.m".into(),
-                columns: vec![IndirectReport {
-                    relation: "DB.SCH.T".into(),
-                    column: "id".into(),
-                    role: "join_key",
-                    projected: false,
-                }],
+                columns: vec![IndirectReport { relation: "DB.SCH.T".into(), column: "id".into(), role: "join_key", projected: false }],
                 unplaced_qualify: 0,
                 unplaced_join: 0,
                 unplaced_filter: 0,

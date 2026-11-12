@@ -27,9 +27,8 @@ use crate::catalog::{Elsewhere, RawCatalog};
 use crate::engine::{self, Visible};
 use crate::manifest::{norm_relation, Node, Project, RawManifest, SqlSource};
 use crate::report::{
-    self, IndirectReport, LostColumn, LostEnd, LostRelation, MergedScopeReport, ModelReads,
-    PartialColumn, PartialGap, AmbiguousInferred, ModelReport, ReadDownstream, RelationCollision, Report, ReportIssue, Thin,
-    Totals, UnbackedReport,
+    self, AmbiguousInferred, IndirectReport, LostColumn, LostEnd, LostRelation, MergedScopeReport, ModelReads, ModelReport, PartialColumn,
+    PartialGap, ReadDownstream, RelationCollision, Report, ReportIssue, Thin, Totals, UnbackedReport,
 };
 use crate::role;
 use crate::schema::{Agreement, Provenance, Store};
@@ -297,14 +296,8 @@ pub fn run(project: &Project, warehouse: HashMap<String, Vec<String>>, opts: &Op
 /// For a tool that has to show more than the cache and the report keep. What
 /// it is shown is what the pass acted on and wrote, not a recomputation, so it
 /// describes the pass `generate` runs and no older one.
-pub fn run_observed(
-    project: &Project,
-    warehouse: HashMap<String, Vec<String>>,
-    opts: &Options,
-    mut observe: impl FnMut(&Seen),
-) -> Run {
-    let declared: HashMap<String, Vec<String>> =
-        project.nodes.values().map(|n| (n.uid.clone(), n.declared.clone())).collect();
+pub fn run_observed(project: &Project, warehouse: HashMap<String, Vec<String>>, opts: &Options, mut observe: impl FnMut(&Seen)) -> Run {
+    let declared: HashMap<String, Vec<String>> = project.nodes.values().map(|n| (n.uid.clone(), n.declared.clone())).collect();
     let mut store = Store::new(declared, warehouse);
     for node in project.nodes.values().filter(|n| !n.file_columns.is_empty()) {
         store.set_file(&node.uid, node.file_columns.clone());
@@ -321,8 +314,7 @@ pub fn run_observed(
     let mut outputs_of: HashMap<String, Vec<String>> = HashMap::new();
     // Columns trusted children read with an edge that their parent's list
     // lacks, filed on the parent once every child has been read (0020).
-    let mut downstream: std::collections::BTreeMap<String, std::collections::BTreeMap<String, ReadDownstream>> =
-        Default::default();
+    let mut downstream: std::collections::BTreeMap<String, std::collections::BTreeMap<String, ReadDownstream>> = Default::default();
     // Entries of models with nothing to say, kept in case a child gives them
     // something.
     let mut quiet: HashMap<String, ModelReport> = HashMap::new();
@@ -334,10 +326,7 @@ pub fn run_observed(
         relation_collisions: project
             .collisions
             .iter()
-            .map(|(relation, nodes)| RelationCollision {
-                relation: relation.clone(),
-                nodes: nodes.clone(),
-            })
+            .map(|(relation, nodes)| RelationCollision { relation: relation.clone(), nodes: nodes.clone() })
             .collect(),
         ..Default::default()
     };
@@ -446,8 +435,7 @@ pub fn run_observed(
         // it downstream. With neither, the list stays: the reads say the SQL
         // cannot run, not that the names it projects are wrong, and taking it
         // away would leave nothing at all (0019).
-        let replaceable =
-            store.warehouse(&model.uid).is_some() || store.declared(&model.uid).is_some();
+        let replaceable = store.warehouse(&model.uid).is_some() || store.declared(&model.uid).is_some();
         if plan != Plan::Parsed || (!resolved.unbacked.is_empty() && replaceable) {
             store.retract_computed(&model.uid);
         }
@@ -484,8 +472,7 @@ pub fn run_observed(
         // Coverage and the per model edge count are both measured over the
         // direct edges alone: an indirect edge reaches every output column, so
         // counting it would report every model fully covered.
-        let produced: HashSet<&str> =
-            published.edges[..published.direct].iter().map(|e| e.to_col.as_str()).collect();
+        let produced: HashSet<&str> = published.edges[..published.direct].iter().map(|e| e.to_col.as_str()).collect();
 
         // What a downstream model would see. This is the figure earlier runs
         // printed, kept so the two are comparable, but for a model with no
@@ -493,25 +480,19 @@ pub fn run_observed(
         // compile against itself.
         let (reference, _) = store.visible(&model.uid);
         rep.totals.columns_total += reference.len();
-        rep.totals.columns_covered +=
-            reference.iter().filter(|c| produced.contains(c.as_str())).count();
+        rep.totals.columns_covered += reference.iter().filter(|c| produced.contains(c.as_str())).count();
 
         // The same sum against a list collin did not produce. Roots come out of
         // the denominator: a column built from a literal has no parent, so
         // counting it as a miss would understate coverage and send a reader
         // looking for something the SQL says is not there.
         let root: HashSet<&str> = resolved.roots.iter().map(|r| r.column.as_str()).collect();
-        let own_only = |c: &&String| {
-            reads_only_itself && !root.contains(c.as_str()) && !produced.contains(c.as_str())
-        };
-        if let Some(independent) = store.warehouse(&model.uid).or_else(|| store.declared(&model.uid))
-        {
+        let own_only = |c: &&String| reads_only_itself && !root.contains(c.as_str()) && !produced.contains(c.as_str());
+        if let Some(independent) = store.warehouse(&model.uid).or_else(|| store.declared(&model.uid)) {
             let judged = independent.iter().filter(|c| !root.contains(c.as_str()) && !own_only(c));
             rep.totals.columns_total_independent += judged.clone().count();
-            rep.totals.columns_covered_independent +=
-                judged.filter(|c| produced.contains(c.as_str())).count();
-            rep.totals.columns_root +=
-                independent.iter().filter(|c| root.contains(c.as_str())).count();
+            rep.totals.columns_covered_independent += judged.filter(|c| produced.contains(c.as_str())).count();
+            rep.totals.columns_root += independent.iter().filter(|c| root.contains(c.as_str())).count();
             rep.totals.columns_self += independent.iter().filter(own_only).count();
         }
 
@@ -538,10 +519,9 @@ pub fn run_observed(
             Plan::Parsed => lost_columns(&resolved, &parents, &published.bridged),
             // The columns both have. The table's others went out by name or not
             // at all, and the compile's others on no rung.
-            Plan::PerColumn => lost_columns(&resolved, &parents, &published.bridged)
-                .into_iter()
-                .filter(|l| shared.contains(&l.column))
-                .collect(),
+            Plan::PerColumn => {
+                lost_columns(&resolved, &parents, &published.bridged).into_iter().filter(|l| shared.contains(&l.column)).collect()
+            }
             Plan::Inferred => Vec::new(),
         };
         rep.totals.columns_lost += lost.len();
@@ -605,8 +585,11 @@ pub fn run_observed(
             rep.totals.read_through_star += 1;
             let against = parents.iter().find(|p| p.node.uid == parent).map_or("unknown", |p| p.provenance.as_str());
             let in_compile = outputs_of.get(&parent).is_some_and(|o| o.contains(&s.column));
-            let entry = downstream.entry(parent).or_default().entry(s.column.clone()).or_insert_with(|| {
-                ReadDownstream { column: s.column.clone(), against, in_compile, read_by: Vec::new() }
+            let entry = downstream.entry(parent).or_default().entry(s.column.clone()).or_insert_with(|| ReadDownstream {
+                column: s.column.clone(),
+                against,
+                in_compile,
+                read_by: Vec::new(),
             });
             if !entry.read_by.contains(&model.uid) {
                 entry.read_by.push(model.uid.clone());
@@ -631,26 +614,23 @@ pub fn run_observed(
                     continue;
                 }
                 let parent = node_for(project, &read, &u.relation);
-                let backed = resolved
-                    .edges
-                    .iter()
-                    .any(|e| e.from_relation == u.relation && e.from_column == u.column);
+                let backed = resolved.edges.iter().any(|e| e.from_relation == u.relation && e.from_column == u.column);
                 if u.relation.is_empty() || !backed || !project.nodes.get(&parent).is_some_and(Node::is_model) {
                     unexplained = true;
                     continue;
                 }
-                let against = parents
-                    .iter()
-                    .find(|p| p.node.uid == parent)
-                    .map_or("unknown", |p| p.provenance.as_str());
+                let against = parents.iter().find(|p| p.node.uid == parent).map_or("unknown", |p| p.provenance.as_str());
                 let in_compile = outputs_of.get(&parent).is_some_and(|o| o.contains(&u.column));
                 let parent_compiled = project.nodes.get(&parent).is_some_and(|p| p.sql_source == SqlSource::Manifest);
                 if model.sql_source.file().is_some() && parent_compiled && !in_compile {
                     unexplained = true;
                     continue;
                 }
-                let entry = downstream.entry(parent).or_default().entry(u.column.clone()).or_insert_with(|| {
-                    ReadDownstream { column: u.column.clone(), against, in_compile, read_by: Vec::new() }
+                let entry = downstream.entry(parent).or_default().entry(u.column.clone()).or_insert_with(|| ReadDownstream {
+                    column: u.column.clone(),
+                    against,
+                    in_compile,
+                    read_by: Vec::new(),
                 });
                 if !entry.read_by.contains(&model.uid) {
                     entry.read_by.push(model.uid.clone());
@@ -804,11 +784,7 @@ struct StarRead {
 /// longer lost or roots. The store never hears of the columns, so they define
 /// nothing downstream (0030).
 fn read_through_star(
-    project: &Project,
-    store: &Store,
-    outputs_of: &HashMap<String, Vec<String>>,
-    model: &Node,
-    visible: &[Visible],
+    project: &Project, store: &Store, outputs_of: &HashMap<String, Vec<String>>, model: &Node, visible: &[Visible],
     resolved: &mut engine::Resolved,
 ) -> Vec<StarRead> {
     let mut found: Vec<StarRead> = Vec::new();
@@ -838,8 +814,7 @@ fn read_through_star(
             "none"
         };
     }
-    let mut extended: Vec<Visible> =
-        visible.iter().map(|v| Visible { relation: v.relation.clone(), columns: v.columns.clone() }).collect();
+    let mut extended: Vec<Visible> = visible.iter().map(|v| Visible { relation: v.relation.clone(), columns: v.columns.clone() }).collect();
     let mut added: HashSet<(&str, &str)> = HashSet::new();
     for f in found.iter().filter(|f| f.witness != "none") {
         if let Some(v) = extended.iter_mut().find(|v| norm_relation(&v.relation) == f.relation) {
@@ -903,35 +878,22 @@ fn partial_columns(published: &[cache::Partial]) -> Vec<PartialColumn> {
 /// phantom reads is labelled with where the column list the engine was handed
 /// for it came from: that is the pass's knowledge, not the engine's, and a list
 /// short of the column is the usual cause.
-fn lost_columns(
-    resolved: &engine::Resolved,
-    parents: &[Parent],
-    bridged: &HashSet<String>,
-) -> Vec<LostColumn> {
-    let from: HashMap<String, &'static str> =
-        parents.iter().map(|p| (norm_relation(&p.node.relation), p.provenance.as_str())).collect();
+fn lost_columns(resolved: &engine::Resolved, parents: &[Parent], bridged: &HashSet<String>) -> Vec<LostColumn> {
+    let from: HashMap<String, &'static str> = parents.iter().map(|p| (norm_relation(&p.node.relation), p.provenance.as_str())).collect();
     let end = |d: &engine::DeadEnd| match d {
         engine::DeadEnd::Phantom { via, reads, .. } => LostEnd {
             reason: "phantom",
             via: Some(via.clone()),
             relations: reads
                 .iter()
-                .map(|r| LostRelation {
-                    relation: r.clone(),
-                    columns_from: from.get(r).copied().unwrap_or("unknown"),
-                })
+                .map(|r| LostRelation { relation: r.clone(), columns_from: from.get(r).copied().unwrap_or("unknown") })
                 .collect(),
             names: Vec::new(),
         },
-        engine::DeadEnd::NamesUnreached { names } => LostEnd {
-            reason: "names_unreached",
-            via: None,
-            relations: Vec::new(),
-            names: names.clone(),
-        },
-        engine::DeadEnd::Unresolved => {
-            LostEnd { reason: "unresolved", via: None, relations: Vec::new(), names: Vec::new() }
+        engine::DeadEnd::NamesUnreached { names } => {
+            LostEnd { reason: "names_unreached", via: None, relations: Vec::new(), names: names.clone() }
         }
+        engine::DeadEnd::Unresolved => LostEnd { reason: "unresolved", via: None, relations: Vec::new(), names: Vec::new() },
     };
     resolved
         .lost
@@ -1040,12 +1002,7 @@ fn engine_gap(resolved: &engine::Resolved, own: &str) -> (bool, bool) {
 /// each node once. Inference takes the first parent carrying a name, so the
 /// order is part of the answer and must not move with the walk.
 fn read_nodes<'a>(project: &'a Project, model: &'a Node) -> Vec<&'a Node> {
-    fn walk<'a>(
-        project: &'a Project,
-        uids: &'a [String],
-        seen: &mut HashSet<&'a str>,
-        out: &mut Vec<&'a Node>,
-    ) {
+    fn walk<'a>(project: &'a Project, uids: &'a [String], seen: &mut HashSet<&'a str>, out: &mut Vec<&'a Node>) {
         for uid in uids {
             if !seen.insert(uid.as_str()) {
                 continue;
@@ -1134,13 +1091,7 @@ impl Published {
 }
 
 fn publish(
-    project: &Project,
-    store: &Store,
-    model: &Node,
-    resolved: &engine::Resolved,
-    plan: Plan,
-    shared: &[String],
-    opts: &Options,
+    project: &Project, store: &Store, model: &Node, resolved: &engine::Resolved, plan: Plan, shared: &[String], opts: &Options,
 ) -> Published {
     let read = claimants(project, model);
     let mut ambiguous = Vec::new();
@@ -1155,15 +1106,8 @@ fn publish(
         Plan::PerColumn => {
             let mut edges = parsed_edges(project, &read, model, resolved);
             edges.retain(|e| shared.contains(&e.to_col));
-            let rest: Vec<String> = store
-                .warehouse(&model.uid)
-                .into_iter()
-                .flatten()
-                .filter(|c| !shared.contains(c))
-                .cloned()
-                .collect();
-            let (inferred, found) =
-                if opts.infer { infer_edges(project, store, model, resolved, &rest) } else { Default::default() };
+            let rest: Vec<String> = store.warehouse(&model.uid).into_iter().flatten().filter(|c| !shared.contains(c)).cloned().collect();
+            let (inferred, found) = if opts.infer { infer_edges(project, store, model, resolved, &rest) } else { Default::default() };
             ambiguous = found;
             let n = inferred.len();
             edges.extend(inferred);
@@ -1247,12 +1191,7 @@ fn publish(
             Plan::Inferred => false,
         })
         .filter(|p| fed.contains(p.output.as_str()))
-        .map(|p| cache::Partial {
-            node: model.uid.clone(),
-            column: p.output.clone(),
-            reason: p.reason.as_str(),
-            name: p.name.clone(),
-        })
+        .map(|p| cache::Partial { node: model.uid.clone(), column: p.output.clone(), reason: p.reason.as_str(), name: p.name.clone() })
         .collect();
     Published { plan, edges, direct, inferred, bridged, ambiguous, roots, rules, expressions, partial }
 }
@@ -1285,11 +1224,7 @@ fn worth_an_expression(kind: role::Role) -> bool {
 /// the role and not the text. The same edges are skipped as `parsed_edges`
 /// skips them, so a column fed only by the model's own self read has none.
 fn expressions_of(
-    project: &Project,
-    read: &HashMap<String, Option<String>>,
-    model: &Node,
-    resolved: &engine::Resolved,
-    only: Option<&[String]>,
+    project: &Project, read: &HashMap<String, Option<String>>, model: &Node, resolved: &engine::Resolved, only: Option<&[String]>,
 ) -> Vec<cache::Expression> {
     let own = norm_relation(&model.relation);
     // Per column, the loudest edge so far and the greatest step count.
@@ -1316,14 +1251,7 @@ fn expressions_of(
         .filter(|(_, (kind, _, _))| worth_an_expression(*kind))
         .map(|(column, (kind, text, steps))| {
             let (text, cut) = cut_text(text);
-            cache::Expression {
-                node: model.uid.clone(),
-                column: column.to_string(),
-                kind: kind.as_str().to_string(),
-                text,
-                steps,
-                cut,
-            }
+            cache::Expression { node: model.uid.clone(), column: column.to_string(), kind: kind.as_str().to_string(), text, steps, cut }
         })
         .collect()
 }
@@ -1332,12 +1260,7 @@ fn expressions_of(
 /// resolve to, mapped to the nodes an edge names. A column of the model itself
 /// (an incremental model's filter on its own table) is left out as the indirect
 /// edges leave it out. Two rules the same in clause, text and columns are one.
-fn rules_of(
-    project: &Project,
-    read: &HashMap<String, Option<String>>,
-    model: &Node,
-    resolved: &engine::Resolved,
-) -> Vec<cache::Rule> {
+fn rules_of(project: &Project, read: &HashMap<String, Option<String>>, model: &Node, resolved: &engine::Resolved) -> Vec<cache::Rule> {
     let own = norm_relation(&model.relation);
     type Columns = Vec<(String, String)>;
     let mut seen: HashSet<(&str, &str, Columns)> = HashSet::new();
@@ -1376,15 +1299,10 @@ fn rules_of(
 /// several, nothing is chosen, and the report lists the read. `parsed` is the
 /// model's parsed edges, which an inferred one never doubles.
 fn unbacked_edges(
-    project: &Project,
-    read: &HashMap<String, Option<String>>,
-    model: &Node,
-    resolved: &engine::Resolved,
-    parsed: &[cache::Edge],
+    project: &Project, read: &HashMap<String, Option<String>>, model: &Node, resolved: &engine::Resolved, parsed: &[cache::Edge],
 ) -> Vec<cache::Edge> {
     let own = norm_relation(&model.relation);
-    let have: HashSet<(&str, &str, &str)> =
-        parsed.iter().map(|e| (e.from.as_str(), e.from_col.as_str(), e.to_col.as_str())).collect();
+    let have: HashSet<(&str, &str, &str)> = parsed.iter().map(|e| (e.from.as_str(), e.from_col.as_str(), e.to_col.as_str())).collect();
     let mut seen: HashSet<(String, String, String)> = HashSet::new();
     let mut out = Vec::new();
     for u in &resolved.unbacked {
@@ -1411,12 +1329,7 @@ fn unbacked_edges(
 
 /// The edges the SQL states, each with the role its expression shows. `read`
 /// is `claimants` for the model.
-fn parsed_edges(
-    project: &Project,
-    read: &HashMap<String, Option<String>>,
-    model: &Node,
-    resolved: &engine::Resolved,
-) -> Vec<cache::Edge> {
+fn parsed_edges(project: &Project, read: &HashMap<String, Option<String>>, model: &Node, resolved: &engine::Resolved) -> Vec<cache::Edge> {
     let own = norm_relation(&model.relation);
     let mut out = Vec::new();
     for e in &resolved.edges {
@@ -1456,15 +1369,10 @@ fn parsed_edges(
 /// in the engine: the one `indirect_precedence` puts first. The report still
 /// lists every read (0013).
 fn fan_out(
-    project: &Project,
-    read: &HashMap<String, Option<String>>,
-    model: &Node,
-    reads: &[engine::IndirectRead],
-    outputs: &[String],
+    project: &Project, read: &HashMap<String, Option<String>>, model: &Node, reads: &[engine::IndirectRead], outputs: &[String],
     direct: &[cache::Edge],
 ) -> Vec<cache::Edge> {
-    let direct: HashSet<(&str, &str, &str)> =
-        direct.iter().map(|e| (e.from.as_str(), e.from_col.as_str(), e.to_col.as_str())).collect();
+    let direct: HashSet<(&str, &str, &str)> = direct.iter().map(|e| (e.from.as_str(), e.from_col.as_str(), e.to_col.as_str())).collect();
     let own = norm_relation(&model.relation);
     // Keyed by what the edge will name rather than by the relation read, and
     // kept in the order first seen, so the cache comes out in the same order
@@ -1519,10 +1427,7 @@ fn row_reads(resolved: &engine::Resolved, own: &str) -> Vec<IndirectReport> {
         .iter()
         .filter(|r| r.relation != own)
         .map(|r| IndirectReport {
-            projected: resolved
-                .edges
-                .iter()
-                .any(|e| e.from_relation == r.relation && e.from_column == r.column),
+            projected: resolved.edges.iter().any(|e| e.from_relation == r.relation && e.from_column == r.column),
             relation: r.relation.clone(),
             column: r.column.clone(),
             role: r.role.as_str(),
@@ -1584,11 +1489,7 @@ pub struct Ambiguity {
 ///
 /// `outputs` is the model's columns to find a parent for.
 fn infer_edges(
-    project: &Project,
-    store: &Store,
-    model: &Node,
-    reading: &engine::Resolved,
-    outputs: &[String],
+    project: &Project, store: &Store, model: &Node, reading: &engine::Resolved, outputs: &[String],
 ) -> (Vec<cache::Edge>, Vec<Ambiguity>) {
     // What the model reads, an ephemeral replaced by what it reads. The SQL
     // never names an ephemeral, so an edge inferred for its child must not
@@ -1616,17 +1517,13 @@ fn infer_edges(
                     .filter(|e| e.to_column == *col && e.from_column == *col)
                     .map(|e| node_for(project, &read, &e.from_relation))
                     .collect();
-                let by_compile: Vec<&str> =
-                    candidates.iter().map(|c| c.0.uid.as_str()).filter(|u| named.contains(*u)).collect();
+                let by_compile: Vec<&str> = candidates.iter().map(|c| c.0.uid.as_str()).filter(|u| named.contains(*u)).collect();
                 let known_better = candidates.iter().any(|c| c.2 != Provenance::Declared);
                 let (pick, by): (Vec<&str>, &'static str) = if !by_compile.is_empty() {
                     (by_compile, "compile")
                 } else if reading.edges.is_empty() {
-                    let every = candidates
-                        .iter()
-                        .filter(|c| !(known_better && c.2 == Provenance::Declared))
-                        .map(|c| c.0.uid.as_str())
-                        .collect();
+                    let every =
+                        candidates.iter().filter(|c| !(known_better && c.2 == Provenance::Declared)).map(|c| c.0.uid.as_str()).collect();
                     (every, "every")
                 } else {
                     (vec![candidates[0].0.uid.as_str()], "order")
@@ -1715,8 +1612,7 @@ fn wanted_folders(project: &Project) -> Vec<String> {
     if !sql().any(|n| n.sql_source == SqlSource::Missing && path(n).is_some()) {
         return Vec::new();
     }
-    let mut firsts: Vec<String> =
-        sql().filter_map(path).filter_map(|rel| rel.split('/').next().map(str::to_string)).collect();
+    let mut firsts: Vec<String> = sql().filter_map(path).filter_map(|rel| rel.split('/').next().map(str::to_string)).collect();
     firsts.sort();
     firsts.dedup();
     firsts
@@ -2024,10 +1920,7 @@ mod tests {
 
     fn project_of(nodes: Vec<(String, Node)>) -> Project {
         let nodes: HashMap<String, Node> = nodes.into_iter().collect();
-        let by_relation = nodes
-            .values()
-            .map(|n| (norm_relation(&n.relation), n.uid.clone()))
-            .collect();
+        let by_relation = nodes.values().map(|n| (norm_relation(&n.relation), n.uid.clone())).collect();
         Project {
             nodes,
             by_relation,
@@ -2067,13 +1960,7 @@ mod tests {
     }
 
     fn raw(from: &str, col: &str) -> engine::RawEdge {
-        engine::RawEdge {
-            from_relation: from.into(),
-            from_column: col.into(),
-            to_column: col.into(),
-            expression: String::new(),
-            steps: 0,
-        }
+        engine::RawEdge { from_relation: from.into(), from_column: col.into(), to_column: col.into(), expression: String::new(), steps: 0 }
     }
 
     /// A source, a model whose table matches its compile, and a model whose
@@ -2089,14 +1976,12 @@ mod tests {
     fn shop() -> (Project, HashMap<String, Vec<String>>) {
         let mut raw = node("source.p.raw", "db.sch.raw", &[], &[]);
         raw.1.kind = "source".into();
-        let mut orders =
-            node("model.p.orders", "db.sch.orders", &["source.p.raw"], &["doubled", "id"]);
+        let mut orders = node("model.p.orders", "db.sch.orders", &["source.p.raw"], &["doubled", "id"]);
         orders.1.sql = "select id, amount * 2 as doubled, 'web' as channel from db.sch.raw \
                         where status = 'open'"
             .into();
         let mut behind = node("model.p.behind", "db.sch.behind", &["source.p.raw"], &[]);
-        behind.1.sql =
-            "select id as order_id, amount * 2 as total from db.sch.raw where status = 'void'".into();
+        behind.1.sql = "select id as order_id, amount * 2 as total from db.sch.raw where status = 'void'".into();
         let warehouse = HashMap::from([
             ("source.p.raw".to_string(), cols(&["amount", "id", "status"])),
             ("model.p.orders".to_string(), cols(&["channel", "doubled", "id"])),
@@ -2193,10 +2078,7 @@ mod tests {
     }
 
     fn worded(r: &Run) -> Vec<(&str, &str, &str, u32, bool)> {
-        r.expressions
-            .iter()
-            .map(|e| (e.column.as_str(), e.kind.as_str(), e.text.as_str(), e.steps, e.cut))
-            .collect()
+        r.expressions.iter().map(|e| (e.column.as_str(), e.kind.as_str(), e.text.as_str(), e.steps, e.cut)).collect()
     }
 
     #[test]
@@ -2235,11 +2117,7 @@ mod tests {
 
     #[test]
     fn a_predicate_in_a_cte_keeps_its_alias_and_names_the_real_column() {
-        let r = ruled(
-            "with s as (select id, status as st from db.sch.raw) select id from s where st = 'open'",
-            &["id"],
-            true,
-        );
+        let r = ruled("with s as (select id, status as st from db.sch.raw) select id from s where st = 'open'", &["id"], true);
         assert_eq!(ruling(&r), vec![("WHERE", "st = 'open'", vec!["raw.status".to_string()])]);
     }
 
@@ -2253,10 +2131,7 @@ mod tests {
             true,
         );
         let wheres: Vec<_> = ruling(&r).into_iter().filter(|(c, ..)| *c == "WHERE").collect();
-        assert_eq!(
-            wheres,
-            vec![("WHERE", "id > 0", vec!["raw.id".to_string()]), ("WHERE", "id > 0", vec!["cust.id".to_string()])]
-        );
+        assert_eq!(wheres, vec![("WHERE", "id > 0", vec!["raw.id".to_string()]), ("WHERE", "id > 0", vec!["cust.id".to_string()])]);
         // Same text over the same column: one.
         let r = ruled(
             "with a as (select id from db.sch.raw where status = 'open'), b as (select id as bid from db.sch.raw where status = 'open') \
@@ -2273,11 +2148,7 @@ mod tests {
     /// `WHERE` is another rule with its own names.
     #[test]
     fn a_subquery_has_a_rule_of_its_own_and_the_outer_one_lists_the_placed_columns_only() {
-        let r = ruled(
-            "select id from db.sch.raw where id in (select c.id from db.sch.cust as c where c.name = 'x')",
-            &["id"],
-            true,
-        );
+        let r = ruled("select id from db.sch.raw where id in (select c.id from db.sch.cust as c where c.name = 'x')", &["id"], true);
         let ids = vec!["raw.id".to_string(), "cust.id".to_string()];
         assert_eq!(
             ruling(&r),
@@ -2319,8 +2190,7 @@ mod tests {
         assert!(r.rules.iter().all(|x| x.node != "model.p.behind"));
         assert!(r.expressions.iter().all(|x| x.node != "model.p.behind"));
         assert!(r.rules.iter().any(|x| x.node == "model.p.orders"), "the trusted one has its rule");
-        let doubled: Vec<&str> =
-            r.expressions.iter().filter(|x| x.node == "model.p.orders").map(|x| x.column.as_str()).collect();
+        let doubled: Vec<&str> = r.expressions.iter().filter(|x| x.node == "model.p.orders").map(|x| x.column.as_str()).collect();
         assert_eq!(doubled, vec!["doubled"], "the trusted one has its expression, which `behind` would too if let out");
     }
 
@@ -2357,28 +2227,17 @@ mod tests {
             assert_eq!(worded(&r), vec![("z", "transform", "upper(status)", 1, false)], "{sql}");
         }
         // One path: the outer text is held, though the inner one is greater.
-        let r = ruled(
-            "with c1 as (select upper(status) as y from db.sch.raw) select left(y, 3) as z from c1",
-            &["z"],
-            false,
-        );
+        let r = ruled("with c1 as (select upper(status) as y from db.sch.raw) select left(y, 3) as z from c1", &["z"], false);
         assert_eq!(worded(&r), vec![("z", "transform", "left(y, 3)", 2, false)]);
     }
 
     #[test]
     fn the_steps_count_the_expressions_along_the_longest_path() {
-        let scaled = ruled(
-            "with c1 as (select sum(amount) as t from db.sch.raw) select t * 1.2 as g from c1",
-            &["g"],
-            false,
-        );
+        let scaled = ruled("with c1 as (select sum(amount) as t from db.sch.raw) select t * 1.2 as g from c1", &["g"], false);
         assert_eq!(worded(&scaled), vec![("g", "aggregate", "sum(amount)", 2, false)]);
         // `status` goes through `left`, `id` through nothing: the longer path counts.
-        let joined = ruled(
-            "with c1 as (select left(status, 3) as a, id as b from db.sch.raw) select concat(a, b) as ab from c1",
-            &["ab"],
-            false,
-        );
+        let joined =
+            ruled("with c1 as (select left(status, 3) as a, id as b from db.sch.raw) select concat(a, b) as ab from c1", &["ab"], false);
         assert_eq!(worded(&joined), vec![("ab", "transform", "concat(a, b)", 2, false)]);
         // A rename between two expressions is no step of its own.
         let renamed = ruled(
@@ -2450,8 +2309,7 @@ mod tests {
         let t = &r.report.totals;
         assert_eq!((t.columns_self, t.columns_lost), (2, 0));
         assert_eq!((t.columns_covered_independent, t.columns_total_independent), (1, 1));
-        let listed: Vec<(&str, bool)> =
-            r.report.models.iter().map(|m| (m.unique_id.as_str(), m.reads_only_itself)).collect();
+        let listed: Vec<(&str, bool)> = r.report.models.iter().map(|m| (m.unique_id.as_str(), m.reads_only_itself)).collect();
         assert_eq!(listed, vec![("model.p.log", true)], "named, and the filtering one not");
     }
 
@@ -2626,12 +2484,7 @@ mod tests {
         let p = read_with(
             &t,
             "1.11.8",
-            vec![
-                at("up", "../../outside.sql", None),
-                at("root", "/etc/hosts", None),
-                at("drive", "C:\\Windows\\win.ini", None),
-                climbing,
-            ],
+            vec![at("up", "../../outside.sql", None), at("root", "/etc/hosts", None), at("drive", "C:\\Windows\\win.ini", None), climbing],
         );
         for name in ["up", "root", "drive", "climbing"] {
             let n = &p.nodes[&format!("model.shop.{name}")];
@@ -2744,11 +2597,7 @@ mod tests {
         let p = read_with(
             &t,
             "1.11.8",
-            vec![
-                at("blank", "models/blank.sql", None),
-                at("latin", "models/latin.sql", None),
-                at("dir", "models/dir.sql", None),
-            ],
+            vec![at("blank", "models/blank.sql", None), at("latin", "models/latin.sql", None), at("dir", "models/dir.sql", None)],
         );
         let why = |name: &str| p.nodes[&format!("model.shop.{name}")].no_sql().unwrap();
         assert_eq!(why("blank"), "no compiled_code, and its compiled file is empty");
@@ -2850,10 +2699,7 @@ mod tests {
     #[test]
     fn a_model_never_feeds_its_own_column() {
         let p = project();
-        let resolved = engine::Resolved {
-            edges: vec![raw("DB.SCH.CHILD", "a"), raw("DB.SCH.PARENT", "b")],
-            ..Default::default()
-        };
+        let resolved = engine::Resolved { edges: vec![raw("DB.SCH.CHILD", "a"), raw("DB.SCH.PARENT", "b")], ..Default::default() };
         let child = &p.nodes["model.p.child"];
         let edges = parsed_edges(&p, &claimants(&p, child), child, &resolved);
         let kept = vec![("model.p.parent", "b", "model.p.child", "b", "passthrough")];
@@ -2862,8 +2708,7 @@ mod tests {
 
     #[test]
     fn only_a_compile_that_parsed_and_was_not_contradicted_is_planned_as_parsed() {
-        let spoke =
-            engine::Resolved { edges: vec![raw("DB.SCH.PARENT", "a")], ..Default::default() };
+        let spoke = engine::Resolved { edges: vec![raw("DB.SCH.PARENT", "a")], ..Default::default() };
         assert_eq!(plan(&spoke, Agreement::Confirmed, true, true, false), Plan::Parsed);
         assert_eq!(plan(&spoke, Agreement::Unchecked, true, false, false), Plan::Parsed);
         assert_eq!(plan(&spoke, Agreement::Degraded, true, false, false), Plan::Inferred);
@@ -2912,11 +2757,7 @@ mod tests {
         // A NOT IN over the model itself reads it only to filter, and the
         // engine keeps what the subquery projects out of the outputs (0028).
         let r = as_m("select id, ts from db.sch.src where id not in (select id from db.sch.m)");
-        let mut fed: Vec<(&str, &str)> = r
-            .edges
-            .iter()
-            .map(|e| (e.from_relation.as_str(), e.to_column.as_str()))
-            .collect();
+        let mut fed: Vec<(&str, &str)> = r.edges.iter().map(|e| (e.from_relation.as_str(), e.to_column.as_str())).collect();
         fed.sort();
         assert_eq!(fed, vec![("DB.SCH.SRC", "id"), ("DB.SCH.SRC", "ts")]);
         assert_eq!(engine_gap(&r, "DB.SCH.M"), (false, true));
@@ -2938,9 +2779,7 @@ mod tests {
     fn a_self_read_that_reaches_an_output_column_is_still_a_gap() {
         // A column carried over from the model's earlier rows, whose only edge
         // is the one the cache drops.
-        let carried = as_m(
-            "select s.id, t.first_seen from db.sch.src s left join db.sch.m t on s.id = t.id",
-        );
+        let carried = as_m("select s.id, t.first_seen from db.sch.src s left join db.sch.m t on s.id = t.id");
         assert_eq!(engine_gap(&carried, "DB.SCH.M"), (true, true));
     }
 
@@ -2976,8 +2815,7 @@ mod tests {
         assert_eq!(listed, vec!["model.p.n"]);
         let n = &r.report.models[0];
         assert!(n.yaml_stale);
-        let own: Vec<(&str, bool)> =
-            n.issues.iter().map(|i| (i.code.as_str(), i.self_reference)).collect();
+        let own: Vec<(&str, bool)> = n.issues.iter().map(|i| (i.code.as_str(), i.self_reference)).collect();
         assert_eq!(own, vec![("UNRESOLVED_REFERENCE", true)]);
         // What goes in the cache is exactly what it was.
         assert!(r.edges.iter().all(|e| e.from == "source.p.src"));
@@ -3001,8 +2839,7 @@ mod tests {
         eph.1.sql = "select * from db.raw.orders".into();
         let mut nodes = vec![src, eph];
         nodes.extend(children);
-        let warehouse =
-            HashMap::from([("source.p.raw.orders".to_string(), cols(&["amount", "id"]))]);
+        let warehouse = HashMap::from([("source.p.raw.orders".to_string(), cols(&["amount", "id"]))]);
         (project_of(nodes), warehouse)
     }
 
@@ -3023,8 +2860,7 @@ mod tests {
             node("source.p.c", "db.raw.c", &[], &[]),
             node("model.p.m", "db.sch.m", &["source.p.c", "model.p.eph", "source.p.b"], &[]),
         ]);
-        let read: Vec<&str> =
-            read_nodes(&p, &p.nodes["model.p.m"]).iter().map(|n| n.uid.as_str()).collect();
+        let read: Vec<&str> = read_nodes(&p, &p.nodes["model.p.m"]).iter().map(|n| n.uid.as_str()).collect();
         assert_eq!(read, vec!["source.p.c", "source.p.a", "source.p.b"]);
     }
 
@@ -3034,10 +2870,7 @@ mod tests {
         // had no column list for the star to expand into, and the child came
         // out with no columns at all.
         let (p, warehouse) = through_an_ephemeral(vec![
-            child_of_eph(
-                "model.p.star",
-                "with __dbt__cte__eph as (select * from db.raw.orders) select * from __dbt__cte__eph",
-            ),
+            child_of_eph("model.p.star", "with __dbt__cte__eph as (select * from db.raw.orders) select * from __dbt__cte__eph"),
             child_of_eph(
                 "model.p.listed",
                 "with __dbt__cte__eph as (select id, amount from db.raw.orders) \
@@ -3045,9 +2878,7 @@ mod tests {
             ),
         ]);
         let r = run(&p, warehouse, &opts(true, false));
-        let into = |to: &str| -> Vec<(&str, &str, &str, &str, &str)> {
-            shape(&r.edges).into_iter().filter(|e| e.2 == to).collect()
-        };
+        let into = |to: &str| -> Vec<(&str, &str, &str, &str, &str)> { shape(&r.edges).into_iter().filter(|e| e.2 == to).collect() };
         let o = "source.p.raw.orders";
         for m in ["model.p.star", "model.p.listed"] {
             assert_eq!(
@@ -3135,9 +2966,7 @@ mod tests {
         let (p, warehouse) = stage_project(&["a", "b", "hk", "rs"]);
         let r = run(&p, warehouse, &opts(true, false));
         let (src, stage) = ("source.p.s.p", "model.p.stage");
-        let into = |to: &str| -> Vec<(&str, &str, &str, &str, &str)> {
-            shape(&r.edges).into_iter().filter(|e| e.2 == to).collect()
-        };
+        let into = |to: &str| -> Vec<(&str, &str, &str, &str, &str)> { shape(&r.edges).into_iter().filter(|e| e.2 == to).collect() };
         assert_eq!(
             into(stage),
             vec![(src, "a", stage, "a", "passthrough"), (src, "b", stage, "hk", "inferred")],
@@ -3166,14 +2995,10 @@ mod tests {
         // child nothing, where the reads only say the SQL cannot run.
         let (p, warehouse) = stage_project(&[]);
         let r = run(&p, warehouse, &opts(true, false));
-        let child: Vec<_> =
-            shape(&r.edges).into_iter().filter(|e| e.2 == "model.p.child").map(|e| e.3).collect();
+        let child: Vec<_> = shape(&r.edges).into_iter().filter(|e| e.2 == "model.p.child").map(|e| e.3).collect();
         assert!(child.contains(&"hk"), "{child:?}");
         let child_entry = r.report.models.iter().find(|m| m.unique_id == "model.p.child");
-        assert!(
-            child_entry.is_none_or(|m| m.unknown_relations.is_empty()),
-            "the child is still handed the stage's columns"
-        );
+        assert!(child_entry.is_none_or(|m| m.unknown_relations.is_empty()), "the child is still handed the stage's columns");
     }
 
     #[test]
@@ -3214,10 +3039,8 @@ mod tests {
             model("model.p.quiet", &raw, &[], "select id from db.raw.feed"),
             model("model.p.quiet_kid", &["model.p.quiet"], &[], "select q.id from db.sch.quiet as q where q.amount > 0"),
         ]);
-        let warehouse = HashMap::from([
-            ("source.p.raw.feed".to_string(), cols(&["amount", "id"])),
-            ("model.p.older".to_string(), cols(&["id"])),
-        ]);
+        let warehouse =
+            HashMap::from([("source.p.raw.feed".to_string(), cols(&["amount", "id"])), ("model.p.older".to_string(), cols(&["id"]))]);
         let r = run(&p, warehouse, &opts(true, false));
         let entry = |uid: &str| r.report.models.iter().find(|m| m.unique_id == uid);
         let reads = |uid: &str| -> Vec<(&str, &str, bool, Vec<&str>)> {
@@ -3266,12 +3089,8 @@ mod tests {
     }
 
     fn inferred_from(r: &Run) -> Vec<(&str, &str)> {
-        let mut out: Vec<(&str, &str)> = r
-            .edges
-            .iter()
-            .filter(|e| e.to == "model.p.child")
-            .map(|e| (e.to_col.as_str(), e.from.as_str()))
-            .collect();
+        let mut out: Vec<(&str, &str)> =
+            r.edges.iter().filter(|e| e.to == "model.p.child").map(|e| (e.to_col.as_str(), e.from.as_str())).collect();
         out.sort();
         out
     }
@@ -3283,10 +3102,7 @@ mod tests {
         // `k`.
         let sql = "with l as (select k, ldts, v from db.sch.lnk) select l.k, l.ldts, l.v, l.w as extra from l";
         let r = two_parents(sql, &["k", "ldts", "v"], vec![]);
-        assert_eq!(
-            inferred_from(&r),
-            vec![("k", "model.p.lnk"), ("ldts", "model.p.lnk"), ("v", "model.p.lnk")]
-        );
+        assert_eq!(inferred_from(&r), vec![("k", "model.p.lnk"), ("ldts", "model.p.lnk"), ("v", "model.p.lnk")]);
         let entry = r.report.models.iter().find(|m| m.unique_id == "model.p.child").unwrap();
         assert!(entry.ambiguous_inferred.iter().all(|a| a.by == "compile"));
         assert_eq!(r.report.totals.ambiguous_by_compile, 2);
@@ -3299,10 +3115,7 @@ mod tests {
         let mut yaml_only = node("model.p.yaml_only", "db.sch.yaml_only", &[], &["k"]);
         yaml_only.1.sql = "select from".into();
         let r = two_parents("select from", &["k", "ldts"], vec![yaml_only]);
-        assert_eq!(
-            inferred_from(&r),
-            vec![("k", "model.p.hub"), ("k", "model.p.lnk"), ("ldts", "model.p.hub"), ("ldts", "model.p.lnk")]
-        );
+        assert_eq!(inferred_from(&r), vec![("k", "model.p.hub"), ("k", "model.p.lnk"), ("ldts", "model.p.hub"), ("ldts", "model.p.lnk")]);
         assert_eq!(r.report.totals.ambiguous_by_every, 2);
     }
 
@@ -3324,10 +3137,8 @@ mod tests {
         p.1.sql = "select 1 as a, 2 as b, 3 as c, 4 as x".into();
         let mut m = node("model.p.m", "db.sch.m", &["model.p.p"], &[]);
         m.1.sql = sql.into();
-        let warehouse = HashMap::from([
-            ("model.p.p".to_string(), cols(&["a", "b", "c", "x"])),
-            ("model.p.m".to_string(), cols(&["a", "bb", "x"])),
-        ]);
+        let warehouse =
+            HashMap::from([("model.p.p".to_string(), cols(&["a", "b", "c", "x"])), ("model.p.m".to_string(), cols(&["a", "bb", "x"]))]);
         run(&project_of(vec![p, m]), warehouse, &opts(true, indirect))
     }
 
@@ -3361,8 +3172,7 @@ mod tests {
     #[test]
     fn a_kept_compile_fans_out_onto_the_columns_it_is_kept_for() {
         let r = behind_the_code("select a, b as bb, c from db.sch.p where a > 0", true);
-        let fanned: Vec<&str> =
-            into_m(&r).into_iter().filter(|e| e.4 == "filter").map(|e| e.3).collect();
+        let fanned: Vec<&str> = into_m(&r).into_iter().filter(|e| e.4 == "filter").map(|e| e.3).collect();
         assert_eq!(fanned, vec!["bb"], "`a` has its direct edge, `c` is withheld, `x` is not the SQL's");
     }
 
@@ -3381,10 +3191,7 @@ mod tests {
     fn a_contradicted_compile_is_set_aside_whole_on_its_own_evidence() {
         // Every column renamed, so the two share nothing to keep; and a read
         // of a name the CTE does not give, so the SQL cannot run as it stands.
-        for sql in [
-            "select a as aa, b as b2 from db.sch.p",
-            "with s as (select a from db.sch.p) select s.a, s.b as bb from s",
-        ] {
+        for sql in ["select a as aa, b as b2 from db.sch.p", "with s as (select a from db.sch.p) select s.a, s.b as bb from s"] {
             let r = behind_the_code(sql, false);
             let m = r.report.models.iter().find(|m| m.unique_id == "model.p.m").unwrap();
             assert_eq!(m.provenance, "inferred", "{sql}");
@@ -3409,10 +3216,7 @@ mod tests {
         m.1.sql = sql.into();
         let mut g = node("model.p.g", "db.sch.g", &["model.p.thin"], &[]);
         g.1.sql = "select * from db.sch.thin".into();
-        let warehouse = HashMap::from([
-            ("model.p.thin".to_string(), cols(&["id"])),
-            ("model.p.codes".to_string(), cols(&["id"])),
-        ]);
+        let warehouse = HashMap::from([("model.p.thin".to_string(), cols(&["id"])), ("model.p.codes".to_string(), cols(&["id"]))]);
         let mut seen = Vec::new();
         let r = run_observed(&project_of(vec![thin, codes, m, g]), warehouse, &opts(true, false), |s| {
             let roots = s.resolved.roots.iter().map(|r| r.column.clone()).collect();
@@ -3422,17 +3226,12 @@ mod tests {
     }
 
     fn edges_into<'a>(r: &'a Run, to: &str) -> Vec<(&'a str, &'a str, &'a str, &'a str)> {
-        r.edges
-            .iter()
-            .filter(|e| e.to == to)
-            .map(|e| (e.from.as_str(), e.from_col.as_str(), e.to_col.as_str(), e.kind.as_str()))
-            .collect()
+        r.edges.iter().filter(|e| e.to == to).map(|e| (e.from.as_str(), e.from_col.as_str(), e.to_col.as_str(), e.kind.as_str())).collect()
     }
 
     #[test]
     fn a_column_read_through_a_star_over_a_short_list_keeps_its_edge_when_witnessed() {
-        let (r, seen) =
-            over_thin("with s as (select * from db.sch.thin) select s.id, s.amount, s.status as state, s.nowhere from s");
+        let (r, seen) = over_thin("with s as (select * from db.sch.thin) select s.id, s.amount, s.status as state, s.nowhere from s");
         assert_eq!(
             edges_into(&r, "model.p.m"),
             vec![
@@ -3446,11 +3245,8 @@ mod tests {
         assert_eq!(lost, vec!["nowhere"], "no list of `thin` has it");
         assert!(m.issues.is_empty(), "the reading's issues are the first call's");
         let thin = r.report.models.iter().find(|m| m.unique_id == "model.p.thin").expect("told of the reads");
-        let filed: Vec<(&str, &str, bool)> = thin
-            .read_downstream_but_absent
-            .iter()
-            .map(|d| (d.column.as_str(), d.against, d.in_compile))
-            .collect();
+        let filed: Vec<(&str, &str, bool)> =
+            thin.read_downstream_but_absent.iter().map(|d| (d.column.as_str(), d.against, d.in_compile)).collect();
         assert_eq!(filed, vec![("amount", "warehouse", false), ("status", "warehouse", false)]);
         assert_eq!((r.report.totals.read_through_star, r.report.totals.read_through_star_unwitnessed), (2, 1));
         // The columns lived for one call: the store never heard of them.
@@ -3462,8 +3258,7 @@ mod tests {
     fn an_expression_over_a_name_the_star_lacks_is_left_alone() {
         // The engine makes no column of `amount` inside an expression, so there
         // is no phantom to anchor on and nothing is extended. A known limit.
-        let (r, _) =
-            over_thin("with s as (select * from db.sch.thin) select s.id, sum(s.amount) as total from s group by s.id");
+        let (r, _) = over_thin("with s as (select * from db.sch.thin) select s.id, sum(s.amount) as total from s group by s.id");
         assert_eq!(edges_into(&r, "model.p.m"), vec![("model.p.thin", "id", "id", "passthrough")]);
         assert_eq!(r.report.totals.read_through_star, 0);
     }
@@ -3480,10 +3275,7 @@ mod tests {
         m.1.sql = "with s as (select * from db.sch.thin) select s.code as sc, upper(code) as cu \
                    from s cross join db.sch.codes"
             .into();
-        let warehouse = HashMap::from([
-            ("model.p.thin".to_string(), cols(&["id"])),
-            ("model.p.codes".to_string(), cols(&["code", "id"])),
-        ]);
+        let warehouse = HashMap::from([("model.p.thin".to_string(), cols(&["id"])), ("model.p.codes".to_string(), cols(&["code", "id"]))]);
         let r = run(&project_of(vec![thin, codes, m]), warehouse, &opts(true, false));
         assert_eq!(edges_into(&r, "model.p.m"), vec![("model.p.codes", "code", "cu", "transform")]);
         assert_eq!(r.report.totals.read_through_star, 0);
@@ -3566,10 +3358,7 @@ mod tests {
                 ends: vec![LostEnd {
                     reason: "phantom",
                     via: Some("o".into()),
-                    relations: vec![LostRelation {
-                        relation: "DB.SCH.SHOP_ORDERS".into(),
-                        columns_from: "warehouse",
-                    }],
+                    relations: vec![LostRelation { relation: "DB.SCH.SHOP_ORDERS".into(), columns_from: "warehouse" }],
                     names: Vec::new(),
                 }],
             }]
@@ -3595,10 +3384,7 @@ mod tests {
             let [m] = r.report.models.as_slice() else { panic!("{:?}", r.report.models.len()) };
             assert_eq!(
                 m.partial_columns,
-                vec![PartialColumn {
-                    column: "z".into(),
-                    gaps: vec![PartialGap { reason: "window_key_unbound", name: "nope".into() }],
-                }]
+                vec![PartialColumn { column: "z".into(), gaps: vec![PartialGap { reason: "window_key_unbound", name: "nope".into() }] }]
             );
             assert_eq!((r.report.totals.columns_partial, r.report.totals.columns_lost), (1, 0));
             let found: Vec<&str> = crate::findings::of(&r.report).iter().map(|f| f.category).collect();
@@ -3620,20 +3406,14 @@ mod tests {
         // holds for a model reading nothing else, whose every edge is such a
         // read (0039): that is why `publish` needs no other guard for it.
         for (sql, parents) in [
-            (
-                "select max(m.q) over (order by r.nope) as z from db.sch.raw r join db.sch.m m on r.id = m.id",
-                vec!["source.p.raw"],
-            ),
+            ("select max(m.q) over (order by r.nope) as z from db.sch.raw r join db.sch.m m on r.id = m.id", vec!["source.p.raw"]),
             ("select max(m.q) over (order by m.nope) as z from db.sch.m m", Vec::new()),
         ] {
             let mut raw = node("source.p.raw", "db.sch.raw", &[], &[]);
             raw.1.kind = "source".into();
             let mut m = node("model.p.m", "db.sch.m", &parents, &[]);
             m.1.sql = sql.into();
-            let warehouse = HashMap::from([
-                ("source.p.raw".to_string(), cols(&["id", "ts"])),
-                ("model.p.m".to_string(), cols(&["z"])),
-            ]);
+            let warehouse = HashMap::from([("source.p.raw".to_string(), cols(&["id", "ts"])), ("model.p.m".to_string(), cols(&["z"]))]);
             let (mut engine_side, mut cache_side) = (0, 0);
             let r = run_observed(&project_of(vec![raw, m]), warehouse, &opts(true, false), |s| {
                 engine_side = s.resolved.partial.len();
@@ -3740,9 +3520,8 @@ mod tests {
             ("model.p.stale".to_string(), cols(&["amount", "id"])),
         ]);
         let r = run(&p, warehouse, &opts(true, false));
-        let from = |to: &str| -> Vec<(&str, &str)> {
-            r.edges.iter().filter(|e| e.to == to).map(|e| (e.from.as_str(), e.kind.as_str())).collect()
-        };
+        let from =
+            |to: &str| -> Vec<(&str, &str)> { r.edges.iter().filter(|e| e.to == to).map(|e| (e.from.as_str(), e.kind.as_str())).collect() };
         assert_eq!(from("model.p.lower_only"), vec![(lower, "passthrough"), (lower, "passthrough")]);
         assert_eq!(from("model.p.stale"), vec![(lower, "inferred"), (lower, "inferred")]);
         // Built from both, in either order, the model gives no reason to prefer
@@ -3837,19 +3616,12 @@ mod tests {
             })
             .collect();
         let (bare, raw) = (cols(&["DB.SCH.BARE"]), cols(&["RAW_DB.DBO.ORDERS_BASE"]));
-        assert_eq!(
-            listed,
-            vec![
-                ("model.p.both", "parsed", &bare[..], &[][..]),
-                ("model.p.hard", "parsed", &[][..], &raw[..]),
-            ]
-        );
+        assert_eq!(listed, vec![("model.p.both", "parsed", &bare[..], &[][..]), ("model.p.hard", "parsed", &[][..], &raw[..]),]);
         let hard = &r.report.models[1];
         assert!(hard.issues.is_empty(), "the engine said nothing of it");
         assert_eq!(r.report.totals.undeclared, 1);
         // Naming it is all: the edge the compile states goes out as before.
-        let into_hard: Vec<_> =
-            shape(&r.edges).into_iter().filter(|e| e.2 == "model.p.hard").collect();
+        let into_hard: Vec<_> = shape(&r.edges).into_iter().filter(|e| e.2 == "model.p.hard").collect();
         let stated = ("rel:raw_db.dbo.orders_base", "id", "model.p.hard", "id", "passthrough");
         assert_eq!(into_hard, vec![stated]);
     }
@@ -4085,11 +3857,7 @@ mod tests {
         let got = headers_in(
             None,
             "p",
-            vec![
-                at("x", &t.0.join("plain").to_string_lossy()),
-                at("y", &t.0.join("project").to_string_lossy()),
-                at("z", "project"),
-            ],
+            vec![at("x", &t.0.join("plain").to_string_lossy()), at("y", &t.0.join("project").to_string_lossy()), at("z", "project")],
         );
         let got: HashMap<&str, &[String]> = got.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
         assert!(got["x"].is_empty(), "no dbt_project.yml");
@@ -4138,11 +3906,7 @@ mod tests {
         t.write("away/dbt_project.yml", "name: p\n");
         let mut z = seed_at("p", "z", "seeds/z.csv");
         z.1.root_path = t.0.join("away").to_string_lossy().into_owned();
-        let got = headers_in(
-            Some(&t.0.join("proj")),
-            "",
-            vec![seed_at("p", "x", "seeds/x.csv"), seed_at("p", "y", "seeds/y.csv"), z],
-        );
+        let got = headers_in(Some(&t.0.join("proj")), "", vec![seed_at("p", "x", "seeds/x.csv"), seed_at("p", "y", "seeds/y.csv"), z]);
         let got: HashMap<&str, &[String]> = got.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
         assert!(got["x"].is_empty());
         assert_eq!(got["y"], cols(&["in", "package"]).as_slice());
@@ -4262,10 +4026,8 @@ mod tests {
         events.1.kind = "source".into();
         let mut codes = node("seed.p.codes", "db.seeds.codes", &[], &[]);
         codes.1.kind = "seed".into();
-        let mut tagged =
-            node("model.p.tagged", "db.sch.tagged", &["source.p.land.events", "seed.p.codes"], &[]);
-        tagged.1.sql =
-            "select e.id, c.label from db.land.events e join db.seeds.codes c on e.code = c.code".into();
+        let mut tagged = node("model.p.tagged", "db.sch.tagged", &["source.p.land.events", "seed.p.codes"], &[]);
+        tagged.1.sql = "select e.id, c.label from db.land.events e join db.seeds.codes c on e.code = c.code".into();
         let r = run(&project_of(vec![events, codes, tagged]), HashMap::new(), &opts(true, false));
 
         let m = r.report.models.iter().find(|m| m.unique_id == "model.p.tagged").unwrap();
@@ -4284,12 +4046,7 @@ mod tests {
         let warehouse = HashMap::from([("source.p.src".to_string(), cols(&["id"]))]);
         let r = run(&project_of(vec![src, m]), warehouse, &opts(true, false));
 
-        let listed: Vec<(&str, &[String])> = r
-            .report
-            .models
-            .iter()
-            .map(|m| (m.unique_id.as_str(), &m.undeclared_relations[..]))
-            .collect();
+        let listed: Vec<(&str, &[String])> = r.report.models.iter().map(|m| (m.unique_id.as_str(), &m.undeclared_relations[..])).collect();
         assert_eq!(listed, vec![("model.p.m", &cols(&["SCH.SRC"])[..])]);
     }
 
@@ -4297,16 +4054,8 @@ mod tests {
     fn a_fanned_edge_neither_doubles_a_direct_one_nor_comes_from_the_model_itself() {
         let p = project();
         let reads = vec![
-            engine::IndirectRead {
-                relation: "DB.SCH.PARENT".into(),
-                column: "a".into(),
-                role: role::Role::Filter,
-            },
-            engine::IndirectRead {
-                relation: "DB.SCH.CHILD".into(),
-                column: "a".into(),
-                role: role::Role::Filter,
-            },
+            engine::IndirectRead { relation: "DB.SCH.PARENT".into(), column: "a".into(), role: role::Role::Filter },
+            engine::IndirectRead { relation: "DB.SCH.CHILD".into(), column: "a".into(), role: role::Role::Filter },
         ];
         let direct = vec![cache::Edge {
             from: "model.p.parent".into(),
@@ -4323,15 +4072,9 @@ mod tests {
     #[test]
     fn a_column_read_for_two_reasons_still_draws_one_edge_per_pair() {
         use role::Role::{DedupKey, Filter, JoinKey};
-        let p = project_of(vec![
-            node("model.p.m", "db.sch.m", &["source.p.orders"], &[]),
-            node("source.p.orders", "db.shop.orders", &[], &[]),
-        ]);
-        let read = |column: &str, role| engine::IndirectRead {
-            relation: "DB.SHOP.ORDERS".into(),
-            column: column.into(),
-            role,
-        };
+        let p =
+            project_of(vec![node("model.p.m", "db.sch.m", &["source.p.orders"], &[]), node("source.p.orders", "db.shop.orders", &[], &[])]);
+        let read = |column: &str, role| engine::IndirectRead { relation: "DB.SHOP.ORDERS".into(), column: column.into(), role };
         // The winner comes first for one column and second for the other, so
         // neither the read order nor the engine's sort can be what decides.
         let reads = vec![
@@ -4372,10 +4115,7 @@ mod tests {
                    where o.valid_from <= current_date and o.id is not null \
                    qualify o.valid_from = max(o.valid_from) over (partition by o.id)"
             .into();
-        let warehouse = HashMap::from([(
-            "source.p.orders".to_string(),
-            cols(&["amount", "id", "valid_from"]),
-        )]);
+        let warehouse = HashMap::from([("source.p.orders".to_string(), cols(&["amount", "id", "valid_from"]))]);
         let r = run(&project_of(vec![orders, m]), warehouse, &opts(true, true));
 
         let (o, m) = ("source.p.orders", "model.p.m");
@@ -4395,19 +4135,11 @@ mod tests {
         assert_eq!(r.report.totals.row_deciding_reads, 4);
         // `id` is carried through as well; `valid_from` is read and dropped.
         assert_eq!(r.report.totals.read_not_projected, 2);
-        let reads: Vec<(&str, &str, bool)> = r.report.row_deciding_reads[0]
-            .columns
-            .iter()
-            .map(|c| (c.column.as_str(), c.role, c.projected))
-            .collect();
+        let reads: Vec<(&str, &str, bool)> =
+            r.report.row_deciding_reads[0].columns.iter().map(|c| (c.column.as_str(), c.role, c.projected)).collect();
         assert_eq!(
             reads,
-            vec![
-                ("id", "dedup_key", true),
-                ("id", "filter", true),
-                ("valid_from", "dedup_key", false),
-                ("valid_from", "filter", false),
-            ]
+            vec![("id", "dedup_key", true), ("id", "filter", true), ("valid_from", "dedup_key", false), ("valid_from", "filter", false),]
         );
     }
 
@@ -4431,19 +4163,9 @@ mod tests {
         assert_eq!((t.columns_covered_independent, t.columns_total_independent), (4, 4));
         assert_eq!((t.columns_root, t.yaml_stale), (1, 1));
 
-        let listed: Vec<(&str, &str, &str, usize)> = r
-            .report
-            .models
-            .iter()
-            .map(|m| (m.unique_id.as_str(), m.provenance, m.agreement, m.edges))
-            .collect();
-        assert_eq!(
-            listed,
-            vec![
-                ("model.p.behind", "inferred", "degraded", 2),
-                ("model.p.orders", "parsed", "confirmed", 2),
-            ]
-        );
+        let listed: Vec<(&str, &str, &str, usize)> =
+            r.report.models.iter().map(|m| (m.unique_id.as_str(), m.provenance, m.agreement, m.edges)).collect();
+        assert_eq!(listed, vec![("model.p.behind", "inferred", "degraded", 2), ("model.p.orders", "parsed", "confirmed", 2),]);
 
         // The trusted filter is reported whether or not the run draws it, and
         // the distrusted one is not reported at all.
@@ -4492,8 +4214,7 @@ mod tests {
         lost.1.sql = "select id as order_no from db.sch.raw".into();
         let mut after = node("model.p.after", "db.sch.after", &["model.p.lost"], &[]);
         after.1.sql = "select * from db.sch.lost".into();
-        let warehouse =
-            HashMap::from([("source.p.raw".to_string(), cols(&["amount", "id", "status"]))]);
+        let warehouse = HashMap::from([("source.p.raw".to_string(), cols(&["amount", "id", "status"]))]);
         let r = run(&project_of(vec![raw, lost, after]), warehouse, &opts(true, false));
         assert_eq!(
             shape(&r.edges),
@@ -4526,11 +4247,7 @@ mod tests {
                 plan: s.plan,
                 agreement: s.agreement,
                 silent: s.silent,
-                parents: s
-                    .parents
-                    .iter()
-                    .map(|p| (p.node.uid.clone(), p.provenance, p.columns.clone()))
-                    .collect(),
+                parents: s.parents.iter().map(|p| (p.node.uid.clone(), p.provenance, p.columns.clone())).collect(),
                 engine_edges: s.resolved.edges.len(),
                 computed: s.store.computed(&s.model.uid).cloned(),
             })
@@ -4565,11 +4282,9 @@ mod tests {
         bare.1.kind = "source".into();
         let mut lost = node("model.p.lost", "db.sch.lost", &["source.p.raw"], &["amount", "id"]);
         lost.1.sql = "select id as order_no from db.sch.raw".into();
-        let mut after =
-            node("model.p.after", "db.sch.after", &["model.p.lost", "source.p.bare"], &[]);
+        let mut after = node("model.p.after", "db.sch.after", &["model.p.lost", "source.p.bare"], &[]);
         after.1.sql = "select * from db.sch.lost".into();
-        let warehouse =
-            HashMap::from([("source.p.raw".to_string(), cols(&["amount", "id", "status"]))]);
+        let warehouse = HashMap::from([("source.p.raw".to_string(), cols(&["amount", "id", "status"]))]);
         let (r, seen) = watch(&project_of(vec![raw, bare, lost, after]), warehouse);
 
         let order: Vec<(&str, Plan)> = seen.iter().map(|s| (s.uid.as_str(), s.plan)).collect();
@@ -4603,14 +4318,8 @@ mod tests {
         // `behind` is walked first. Its engine edges would read as two renames,
         // so being shown them in place of its name matches, or
         // the fan-out of `orders` counted as direct, cannot pass for the cache.
-        let own = |e: &cache::Edge| {
-            (e.from.clone(), e.from_col.clone(), e.to.clone(), e.to_col.clone(), e.kind.clone())
-        };
-        let runs = [
-            (true, false, [(2, 0), (2, 0)]),
-            (true, true, [(2, 0), (2, 3)]),
-            (false, true, [(0, 0), (2, 3)]),
-        ];
+        let own = |e: &cache::Edge| (e.from.clone(), e.from_col.clone(), e.to.clone(), e.to_col.clone(), e.kind.clone());
+        let runs = [(true, false, [(2, 0), (2, 0)]), (true, true, [(2, 0), (2, 3)]), (false, true, [(0, 0), (2, 3)])];
         for (infer, indirect, split) in runs {
             let (p, w) = shop();
             let (mut shown, mut counts) = (Vec::new(), Vec::new());
@@ -4672,8 +4381,7 @@ mod tests {
         let o = generate(&Options::new(t.0.clone())).unwrap();
         assert_eq!((o.totals.catalog_elsewhere, o.totals.unchecked, o.totals.degraded), (1, 1, 0));
         assert_eq!((o.totals.edges_parsed, o.totals.edges_inferred, o.totals.columns_withheld), (2, 0, 0));
-        let report: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&o.report).unwrap()).unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&o.report).unwrap()).unwrap();
         assert_eq!(
             report["catalog_elsewhere"],
             serde_json::json!([{
@@ -4826,9 +4534,7 @@ mod tests {
             o.out = Some(target.0.join(name));
             o.report = Some(target.0.join("report.json"));
             generate(&o).unwrap();
-            let read = |p: &Path| -> serde_json::Value {
-                serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
-            };
+            let read = |p: &Path| -> serde_json::Value { serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap() };
             let mut got = read(&o.out_path());
             // What two runs of the same code differ in, as AGENTS.md hashes it.
             let fields = got.as_object_mut().unwrap();
@@ -4846,11 +4552,7 @@ mod tests {
             }
             let edges = |v: &serde_json::Value| -> HashSet<String> {
                 let listed = |k: &str| v[k].as_array().cloned().unwrap_or_default();
-                ["edges", "roots", "rules", "expressions", "partial"]
-                    .into_iter()
-                    .flat_map(listed)
-                    .map(|e| e.to_string())
-                    .collect()
+                ["edges", "roots", "rules", "expressions", "partial"].into_iter().flat_map(listed).map(|e| e.to_string()).collect()
             };
             let (w, g) = (edges(&want), edges(&got));
             let only = |a: &HashSet<String>, b: &HashSet<String>| -> String {
@@ -4875,10 +4577,7 @@ mod tests {
         let mut head = cache.clone();
         let fields = head.as_object_mut().unwrap();
         let lists: Vec<(&str, serde_json::Value)> =
-            ["edges", "roots", "rules", "expressions", "partial"]
-                .into_iter()
-                .filter_map(|k| fields.remove(k).map(|v| (k, v)))
-                .collect();
+            ["edges", "roots", "rules", "expressions", "partial"].into_iter().filter_map(|k| fields.remove(k).map(|v| (k, v))).collect();
         let head = head.to_string();
         let mut out = head[..head.len() - 1].to_string();
         for (k, v) in lists {
@@ -4903,10 +4602,7 @@ mod tests {
     fn lineage_library_gives_the_lineage_written_by_hand() {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
         let root = fixtures.join("lineage-library");
-        assert!(
-            root.join("README.md").exists(),
-            "fixtures/lineage-library is empty: `git submodule update --init` fetches it"
-        );
+        assert!(root.join("README.md").exists(), "fixtures/lineage-library is empty: `git submodule update --init` fetches it");
         let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
 
         // `project: missing: line` or `project: extra: line`.
@@ -4924,11 +4620,8 @@ mod tests {
             }
         }
 
-        let mut projects: Vec<PathBuf> = std::fs::read_dir(&root)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.join("project.json").exists())
-            .collect();
+        let mut projects: Vec<PathBuf> =
+            std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).filter(|p| p.join("project.json").exists()).collect();
         projects.sort();
         assert!(!projects.is_empty(), "lineage-library holds no project");
         let mut faults: Vec<String> = Vec::new();
@@ -4962,11 +4655,7 @@ mod tests {
         for project in marks.keys() {
             faults.push(format!("lineage-library.known.txt marks {project}, which lineage-library lacks"));
         }
-        assert!(
-            faults.is_empty(),
-            "lineage-library and the pass disagree. Read the SQL before either:\n{}",
-            faults.join("\n")
-        );
+        assert!(faults.is_empty(), "lineage-library and the pass disagree. Read the SQL before either:\n{}", faults.join("\n"));
     }
 
     /// One project of lineage-library, run through the pass, in the lines of
@@ -4975,9 +4664,8 @@ mod tests {
         let read = |p: PathBuf| std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         let spec: serde_json::Value = serde_json::from_str(&read(dir.join("project.json"))).unwrap();
         // Columns in their table's order, as the catalog reader hands them over.
-        let columns = |v: &serde_json::Value| -> Vec<String> {
-            v.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect()
-        };
+        let columns =
+            |v: &serde_json::Value| -> Vec<String> { v.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect() };
         let names = |v: &serde_json::Value| -> Vec<String> {
             let mut out = columns(v);
             out.sort();

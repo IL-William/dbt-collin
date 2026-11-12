@@ -212,10 +212,7 @@ mod tests {
 
     #[test]
     fn the_warehouse_is_what_downstream_sees() {
-        let mut s = Store::new(
-            HashMap::from([("m".into(), cols(&["a"]))]),
-            HashMap::from([("m".into(), cols(&["a", "b"]))]),
-        );
+        let mut s = Store::new(HashMap::from([("m".into(), cols(&["a"]))]), HashMap::from([("m".into(), cols(&["a", "b"]))]));
         s.set_computed("m", cols(&["a", "b", "c"]));
         let (c, p) = s.visible("m");
         assert_eq!(c, cols(&["a", "b"]).as_slice());
@@ -296,10 +293,7 @@ mod tests {
 
     #[test]
     fn a_stale_yaml_is_reported_separately() {
-        let s = Store::new(
-            HashMap::from([("m".into(), cols(&["a"]))]),
-            HashMap::from([("m".into(), cols(&["a", "b"]))]),
-        );
+        let s = Store::new(HashMap::from([("m".into(), cols(&["a"]))]), HashMap::from([("m".into(), cols(&["a", "b"]))]));
         assert!(s.yaml_is_stale("m"));
     }
 }

@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use collin_core::lineage::{self, Loaded, Options, Seen};
 use collin_core::engine::DeadEnd;
+use collin_core::lineage::{self, Loaded, Options, Seen};
 use collin_core::manifest::norm_relation;
 use serde_json::{json, Value};
 
@@ -115,9 +115,7 @@ fn dump() -> Result<(usize, PathBuf), String> {
         }
         let path = out.join(format!("{file}.json"));
         let text = serde_json::to_string_pretty(&describe(seen));
-        let wrote = text.map_err(|e| e.to_string()).and_then(|t| {
-            std::fs::write(&path, t).map_err(|e| e.to_string())
-        });
+        let wrote = text.map_err(|e| e.to_string()).and_then(|t| std::fs::write(&path, t).map_err(|e| e.to_string()));
         match wrote {
             Ok(()) => written += 1,
             Err(e) => failed = Some(format!("cannot write {}: {e}", path.display())),
@@ -195,11 +193,8 @@ fn describe(seen: &Seen) -> Value {
         })
         .collect();
 
-    let indirect: Vec<Value> = r
-        .indirect
-        .iter()
-        .map(|i| json!({"relation": i.relation, "column": i.column, "role": i.role.as_str()}))
-        .collect();
+    let indirect: Vec<Value> =
+        r.indirect.iter().map(|i| json!({"relation": i.relation, "column": i.column, "role": i.role.as_str()})).collect();
 
     let issues: Vec<Value> = r
         .issues

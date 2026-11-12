@@ -95,22 +95,15 @@ impl Role {
             Role::Filter => Some(0),
             Role::JoinKey => Some(1),
             Role::DedupKey => Some(2),
-            Role::Passthrough
-            | Role::Rename
-            | Role::Cast
-            | Role::Aggregate
-            | Role::Window
-            | Role::Transform
-            | Role::Hash => None,
+            Role::Passthrough | Role::Rename | Role::Cast | Role::Aggregate | Role::Window | Role::Transform | Role::Hash => None,
         }
     }
 }
 
 const AGGREGATES: &[&str] = &[
-    "sum", "count", "avg", "min", "max", "median", "mode", "stddev", "stddev_pop", "stddev_samp",
-    "variance", "var_pop", "var_samp", "listagg", "array_agg", "object_agg", "any_value",
-    "approx_count_distinct", "percentile_cont", "percentile_disc", "corr", "covar_pop", "covar_samp",
-    "bitand_agg", "bitor_agg", "bitxor_agg", "hash_agg", "grouping",
+    "sum", "count", "avg", "min", "max", "median", "mode", "stddev", "stddev_pop", "stddev_samp", "variance", "var_pop", "var_samp",
+    "listagg", "array_agg", "object_agg", "any_value", "approx_count_distinct", "percentile_cont", "percentile_disc", "corr", "covar_pop",
+    "covar_samp", "bitand_agg", "bitor_agg", "bitxor_agg", "hash_agg", "grouping",
 ];
 
 /// A window is any expression carrying an OVER clause. Checked before the
@@ -137,10 +130,7 @@ fn has_over(expr: &str) -> bool {
 
 /// Functions whose result is a hash of their input. `hash_agg` is an aggregate
 /// and stays one.
-const HASHES: &[&str] = &[
-    "md5", "md5_binary", "md5_hex", "sha1", "sha1_binary", "sha1_hex", "sha2", "sha2_binary",
-    "sha2_hex", "hash",
-];
+const HASHES: &[&str] = &["md5", "md5_binary", "md5_hex", "sha1", "sha1_binary", "sha1_hex", "sha2", "sha2_binary", "sha2_hex", "hash"];
 
 /// True when the whole expression is one call to a hash function, once the
 /// casts round it are peeled: `cast(sha1_binary(concat_ws('||', a, b)) as
@@ -150,9 +140,8 @@ fn is_hash(expr: &str) -> bool {
     let mut t = strip_parens(expr);
     loop {
         let bytes = t.as_bytes();
-        let opener = ["cast(", "try_cast("]
-            .into_iter()
-            .find(|p| bytes.len() >= p.len() && bytes[..p.len()].eq_ignore_ascii_case(p.as_bytes()));
+        let opener =
+            ["cast(", "try_cast("].into_iter().find(|p| bytes.len() >= p.len() && bytes[..p.len()].eq_ignore_ascii_case(p.as_bytes()));
         if let Some(open) = opener {
             if closing(t, open.len() - 1) == Some(t.len() - 1) {
                 match cast_subject(&t[open.len()..t.len() - 1]) {
@@ -173,9 +162,7 @@ fn is_hash(expr: &str) -> bool {
         break;
     }
     match (leading_call(t), t.find('(')) {
-        (Some(call), Some(open)) => {
-            HASHES.contains(&call.as_str()) && closing(t, open) == Some(t.len() - 1)
-        }
+        (Some(call), Some(open)) => HASHES.contains(&call.as_str()) && closing(t, open) == Some(t.len() - 1),
         _ => false,
     }
 }
@@ -235,8 +222,7 @@ pub(crate) fn leading_call(expr: &str) -> Option<String> {
 /// A column and nothing else: `amount`, `o.amount`, `"Amount"`.
 fn is_bare_name(s: &str) -> bool {
     let t = s.trim();
-    !t.is_empty()
-        && t.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '"' || c == '$')
+    !t.is_empty() && t.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '"' || c == '$')
 }
 
 /// Where the parenthesis opened at `open` closes, reading past quoted text: a
@@ -305,11 +291,7 @@ fn last_top_level_cast(s: &str) -> Option<usize> {
 
 /// Types spelled in more than one word, as the parser prints them.
 const MULTI_WORD_TYPES: &[&str] = &[
-    "DOUBLE PRECISION",
-    "CHARACTER VARYING",
-    "CHAR VARYING",
-    "TIMESTAMP WITH TIME ZONE",
-    "TIMESTAMP WITHOUT TIME ZONE",
+    "DOUBLE PRECISION", "CHARACTER VARYING", "CHAR VARYING", "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITHOUT TIME ZONE",
     "TIMESTAMP WITH LOCAL TIME ZONE",
 ];
 
@@ -387,9 +369,7 @@ fn cast_subject(inner: &str) -> Option<&str> {
 fn is_pure_cast(expr: &str) -> bool {
     let t = strip_parens(expr);
     let bytes = t.as_bytes();
-    let opener = ["cast(", "try_cast("]
-        .into_iter()
-        .find(|p| bytes.len() >= p.len() && bytes[..p.len()].eq_ignore_ascii_case(p.as_bytes()));
+    let opener = ["cast(", "try_cast("].into_iter().find(|p| bytes.len() >= p.len() && bytes[..p.len()].eq_ignore_ascii_case(p.as_bytes()));
     if let Some(open) = opener {
         // Only when the call is the whole text: `cast(a as int)::varchar` is a
         // cast of a cast, read below, and `cast(a as int) + b` is no cast.
@@ -416,11 +396,7 @@ fn is_pure_cast(expr: &str) -> bool {
 pub fn classify(expr: &str, source_column: &str, output_column: &str) -> Role {
     let e = expr.trim();
     if e.is_empty() {
-        return if source_column.eq_ignore_ascii_case(output_column) {
-            Role::Passthrough
-        } else {
-            Role::Rename
-        };
+        return if source_column.eq_ignore_ascii_case(output_column) { Role::Passthrough } else { Role::Rename };
     }
     if has_over(e) {
         return Role::Window;
@@ -489,10 +465,7 @@ mod tests {
         assert_eq!(classify("a::varchar", "a", "a"), Role::Cast);
         // AutomateDV's hashdiff: a cast on the outside, a hash of many columns
         // underneath. Calling it a cast would claim the value is unchanged.
-        assert_eq!(
-            classify("cast(md5_binary(concat_ws('||', a, b)) as binary(20))", "a", "h"),
-            Role::Hash
-        );
+        assert_eq!(classify("cast(md5_binary(concat_ws('||', a, b)) as binary(20))", "a", "h"), Role::Hash);
         assert_eq!(classify("(a || b)::varchar", "a", "c"), Role::Transform);
         assert_eq!(classify("try_cast(upper(a) as varchar)", "a", "a"), Role::Transform);
     }
@@ -617,9 +590,6 @@ mod tests {
         }
         // The guarantee the depth walk exists for survives the change: a hash
         // wrapped in a cast is never taken for the cast.
-        assert_eq!(
-            classify("cast(md5_binary(concat_ws('||', \u{130}a, b)) as binary(20))", "a", "h"),
-            Role::Hash
-        );
+        assert_eq!(classify("cast(md5_binary(concat_ws('||', \u{130}a, b)) as binary(20))", "a", "h"), Role::Hash);
     }
 }

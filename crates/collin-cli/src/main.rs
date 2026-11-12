@@ -86,9 +86,8 @@ fn main() -> ExitCode {
 
     let mut i = 1;
     while i < args.len() {
-        let need = |i: usize, what: &str| -> Result<String, String> {
-            args.get(i + 1).cloned().ok_or_else(|| format!("{what} needs a value"))
-        };
+        let need =
+            |i: usize, what: &str| -> Result<String, String> { args.get(i + 1).cloned().ok_or_else(|| format!("{what} needs a value")) };
         let step = match args[i].as_str() {
             "--project" => match need(i, "--project") {
                 Ok(v) => {
@@ -188,18 +187,11 @@ fn main() -> ExitCode {
                     t.sql_from_files, t.without_compiled_code
                 );
             }
-            println!(
-                "    confirmed by catalog    {}  {:.1}%",
-                t.confirmed,
-                pct(t.confirmed, t.models)
-            );
+            println!("    confirmed by catalog    {}  {:.1}%", t.confirmed, pct(t.confirmed, t.models));
             println!("    degraded compile        {} ({} kept per column)", t.degraded, t.per_column);
             println!("    unchecked, no catalog   {}", t.unchecked);
             if t.catalog_elsewhere > 0 {
-                println!(
-                    "    catalog of other tables {}, not used: regenerate it with the manifest's target",
-                    t.catalog_elsewhere
-                );
+                println!("    catalog of other tables {}, not used: regenerate it with the manifest's target", t.catalog_elsewhere);
             }
             println!();
             println!("  {} edges", t.edges_parsed + t.edges_inferred + t.edges_indirect);
@@ -251,22 +243,13 @@ fn main() -> ExitCode {
                 println!("  {} models reading a relation dbt was not told of", t.undeclared);
             }
             if t.columns_withheld > 0 {
-                println!(
-                    "  {} columns compiled but absent from the warehouse, withheld, named in the report",
-                    t.columns_withheld
-                );
+                println!("  {} columns compiled but absent from the warehouse, withheld, named in the report", t.columns_withheld);
             }
             if t.columns_lost > 0 {
-                println!(
-                    "  {} columns of trusted models came out with no edge, named in the report",
-                    t.columns_lost
-                );
+                println!("  {} columns of trusted models came out with no edge, named in the report", t.columns_lost);
             }
             if t.columns_partial > 0 {
-                println!(
-                    "  {} columns of trusted models partly traced, named in the report",
-                    t.columns_partial
-                );
+                println!("  {} columns of trusted models partly traced, named in the report", t.columns_partial);
             }
             if !o.findings.is_empty() {
                 // The report says what each finding means and what to do; here

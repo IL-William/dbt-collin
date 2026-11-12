@@ -103,20 +103,12 @@ impl RawCatalog {
                         .copied()
                         .collect::<Vec<_>>()
                         .join(".");
-                    out.elsewhere.push(Elsewhere {
-                        unique_id: uid,
-                        relation: relation.to_string(),
-                        catalog_relation,
-                    });
+                    out.elsewhere.push(Elsewhere { unique_id: uid, relation: relation.to_string(), catalog_relation });
                     continue;
                 }
             }
-            let mut listed: Vec<(Option<u64>, String)> = entry
-                .columns
-                .into_values()
-                .map(|c| (c.index, c.name.to_lowercase()))
-                .filter(|(_, s)| !s.is_empty())
-                .collect();
+            let mut listed: Vec<(Option<u64>, String)> =
+                entry.columns.into_values().map(|c| (c.index, c.name.to_lowercase())).filter(|(_, s)| !s.is_empty()).collect();
             listed.sort_by(|a, b| (a.0.is_none(), a.0, &a.1).cmp(&(b.0.is_none(), b.0, &b.1)));
             let mut seen = std::collections::HashSet::new();
             let mut cols: Vec<String> = listed.into_iter().map(|(_, c)| c).filter(|c| seen.insert(c.clone())).collect();
@@ -159,11 +151,7 @@ mod tests {
 
     fn entry(database: Option<&str>, schema: &str, name: &str, cols: &[&str]) -> CatalogNode {
         CatalogNode {
-            metadata: CatalogMetadata {
-                database: database.map(str::to_string),
-                schema: schema.into(),
-                name: name.into(),
-            },
+            metadata: CatalogMetadata { database: database.map(str::to_string), schema: schema.into(), name: name.into() },
             columns: cols
                 .iter()
                 .zip(1..)
@@ -173,12 +161,8 @@ mod tests {
     }
 
     fn witness(nodes: Vec<(&str, CatalogNode)>, relations: &[(&str, &str)]) -> Witness {
-        let raw = RawCatalog {
-            nodes: nodes.into_iter().map(|(u, e)| (u.to_string(), e)).collect(),
-            sources: HashMap::new(),
-        };
-        let relations: HashMap<String, String> =
-            relations.iter().map(|(u, r)| (u.to_string(), r.to_string())).collect();
+        let raw = RawCatalog { nodes: nodes.into_iter().map(|(u, e)| (u.to_string(), e)).collect(), sources: HashMap::new() };
+        let relations: HashMap<String, String> = relations.iter().map(|(u, r)| (u.to_string(), r.to_string())).collect();
         raw.columns(|uid| relations.get(uid).map(String::as_str))
     }
 
@@ -238,10 +222,7 @@ mod tests {
     fn the_parts_one_side_does_not_spell_are_not_compared() {
         // An adapter without databases, and a relation in two parts.
         let w = witness(
-            vec![
-                ("model.shop.a", entry(None, "sales", "a", &["x"])),
-                ("model.shop.b", entry(Some("DB"), "SALES", "B", &["y"])),
-            ],
+            vec![("model.shop.a", entry(None, "sales", "a", &["x"])), ("model.shop.b", entry(Some("DB"), "SALES", "B", &["y"]))],
             &[("model.shop.a", "db.sales.a"), ("model.shop.b", "sales.b")],
         );
         assert_eq!(w.columns.len(), 2);
@@ -269,10 +250,7 @@ mod tests {
         // dbt-bigquery lists `device.serial` beside `device`. A dotted name with
         // no column before it is a quoted name of its own.
         let w = witness(
-            vec![(
-                "model.shop.devices",
-                entry(Some("P"), "DS", "DEVICES", &["id", "device", "device.serial", "device.loc.lat", "a.b"]),
-            )],
+            vec![("model.shop.devices", entry(Some("P"), "DS", "DEVICES", &["id", "device", "device.serial", "device.loc.lat", "a.b"]))],
             &[("model.shop.devices", "`p`.`ds`.`devices`")],
         );
         assert_eq!(w.columns["model.shop.devices"], vec!["id", "device", "a.b"]);

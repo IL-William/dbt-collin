@@ -84,215 +84,267 @@ pub fn of(report: &Report) -> Vec<Finding> {
         });
     }
 
-    group(&mut out, report, Group {
-        category: "compiled_file_from_another_graph",
-        owner: "inputs",
-        severity: "warning",
-        one: "compiled file was compiled for another target",
-        many: "compiled files were compiled for another target",
-        why: "The manifest has no SQL for these models, so collin read the files a compile left, \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "compiled_file_from_another_graph",
+            owner: "inputs",
+            severity: "warning",
+            one: "compiled file was compiled for another target",
+            many: "compiled files were compiled for another target",
+            why: "The manifest has no SQL for these models, so collin read the files a compile left, \
               and those files read relations the manifest does not give the models: they come \
               from another target or older code. Their edges are inferred by name.",
-        action: "Compile the project for this target so the manifest carries each model's SQL: \
+            action: "Compile the project for this target so the manifest carries each model's SQL: \
                  dbt compile --target <target>.",
-        pick: |m| m.sql_file_set_aside.then(|| m.sql_file.clone().unwrap_or_default()),
-        columns: |_| 0,
-    });
+            pick: |m| m.sql_file_set_aside.then(|| m.sql_file.clone().unwrap_or_default()),
+            columns: |_| 0,
+        },
+    );
 
-    group(&mut out, report, Group {
-        category: "source_without_columns",
-        owner: "inputs",
-        severity: "warning",
-        one: "model reads a source with no known columns",
-        many: "models read a source with no known columns",
-        why: "A source these models read has no catalog entry and no columns in its YAML, so the \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "source_without_columns",
+            owner: "inputs",
+            severity: "warning",
+            one: "model reads a source with no known columns",
+            many: "models read a source with no known columns",
+            why: "A source these models read has no catalog entry and no columns in its YAML, so the \
               engine was never told what it holds and cannot place what is read from it. dbt \
               builds no source, so only a catalog or the YAML can give it columns. Usually \
               catalog.json was not generated, or its target could not see these tables.",
-        action: "Generate catalog.json with the manifest's target, with credentials that can read \
+            action: "Generate catalog.json with the manifest's target, with credentials that can read \
                  these tables: dbt docs generate --target <target>. Or document their columns in \
                  the sources' YAML.",
-        pick: |m| some_list(m.unknown_sources.iter().cloned()),
-        columns: |_| 0,
-    });
+            pick: |m| some_list(m.unknown_sources.iter().cloned()),
+            columns: |_| 0,
+        },
+    );
 
-    group(&mut out, report, Group {
-        category: "compile_does_not_parse",
-        owner: "project",
-        severity: "error",
-        one: "compile does not parse",
-        many: "compiles do not parse",
-        why: "The SQL dbt compiled for these models is not valid SQL, so none of their columns has \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "compile_does_not_parse",
+            owner: "project",
+            severity: "error",
+            one: "compile does not parse",
+            many: "compiles do not parse",
+            why: "The SQL dbt compiled for these models is not valid SQL, so none of their columns has \
               parsed lineage. A compile that reads `select ,` or `select from` is usually a macro \
               that listed a relation's columns at compile time and found none, because that \
               relation does not exist in this target. Many at once usually mean the target was \
               compiled against another environment's databases, without its environment \
               variables for instance.",
-        action: "Build the relations those macros read in this target before compiling, or make \
+            action: "Build the relations those macros read in this target before compiling, or make \
                  the macros fail on an empty column list rather than write invalid SQL.",
-        pick: |m| m.parse_error.clone(),
-        columns: |_| 0,
-    });
+            pick: |m| m.parse_error.clone(),
+            columns: |_| 0,
+        },
+    );
 
-    group(&mut out, report, Group {
-        category: "reads_a_name_its_cte_lacks",
-        owner: "project",
-        severity: "warning",
-        one: "compile reads a name its own CTE does not have",
-        many: "compiles read a name their own CTE does not have",
-        why: "These compiles read a name from a CTE that does not project it, so they cannot run \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "reads_a_name_its_cte_lacks",
+            owner: "project",
+            severity: "warning",
+            one: "compile reads a name its own CTE does not have",
+            many: "compiles read a name their own CTE does not have",
+            why: "These compiles read a name from a CTE that does not project it, so they cannot run \
               as compiled. Usually a macro listed a relation's columns at compile time and found \
               the relation missing, or found an older version of it.",
-        action: "Build the relation the macro reads in this target, then compile again.",
-        pick: |m| some_list(m.unbacked.iter().map(|u| format!("{}.{}", u.cte, u.column))),
-        columns: |m| m.unbacked.len(),
-    });
+            action: "Build the relation the macro reads in this target, then compile again.",
+            pick: |m| some_list(m.unbacked.iter().map(|u| format!("{}.{}", u.cte, u.column))),
+            columns: |m| m.unbacked.len(),
+        },
+    );
 
-    group(&mut out, report, Group {
-        category: "relation_not_declared",
-        owner: "project",
-        severity: "warning",
-        one: "model reads a relation dbt was not told of",
-        many: "models read a relation dbt was not told of",
-        why: "These models read a table dbt does not know: a raw table no source declares, or a \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "relation_not_declared",
+            owner: "project",
+            severity: "warning",
+            one: "model reads a relation dbt was not told of",
+            many: "models read a relation dbt was not told of",
+            why: "These models read a table dbt does not know: a raw table no source declares, or a \
               model named without ref(). Its edges point at a table no node owns, so the lineage \
               stops there, and dbt cannot order the build around it.",
-        action: "Declare the table as a source and read it with source(), or read the model \
+            action: "Declare the table as a source and read it with source(), or read the model \
                  with ref().",
-        pick: |m| some_list(m.undeclared_relations.iter().cloned()),
-        columns: |_| 0,
-    });
+            pick: |m| some_list(m.undeclared_relations.iter().cloned()),
+            columns: |_| 0,
+        },
+    );
 
-    group(&mut out, report, Group {
-        category: "parent_without_columns",
-        owner: "project",
-        severity: "warning",
-        one: "model reads a parent with no known columns",
-        many: "models read a parent with no known columns",
-        why: "A relation these models read has no catalog entry and no columns in its YAML, so \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "parent_without_columns",
+            owner: "project",
+            severity: "warning",
+            one: "model reads a parent with no known columns",
+            many: "models read a parent with no known columns",
+            why: "A relation these models read has no catalog entry and no columns in its YAML, so \
               the engine was never told what it holds and cannot place what is read from it.",
-        action: "Build the parent in this target and generate catalog.json again, or document \
+            action: "Build the parent in this target and generate catalog.json again, or document \
                  its columns in YAML.",
-        // Not a source: building one again is not its remedy, which
-        // `source_without_columns` gives.
-        pick: |m| some_list(m.unknown_relations.iter().filter(|r| !m.unknown_sources.contains(r)).cloned()),
-        columns: |_| 0,
-    });
+            // Not a source: building one again is not its remedy, which
+            // `source_without_columns` gives.
+            pick: |m| some_list(m.unknown_relations.iter().filter(|r| !m.unknown_sources.contains(r)).cloned()),
+            columns: |_| 0,
+        },
+    );
 
-    group(&mut out, report, Group {
-        category: "table_older_than_code",
-        owner: "project",
-        severity: "warning",
-        one: "table has columns the code no longer writes",
-        many: "tables have columns the code no longer writes",
-        why: "The table has columns the current SQL does not produce: it was built by an earlier \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "table_older_than_code",
+            owner: "project",
+            severity: "warning",
+            one: "table has columns the code no longer writes",
+            many: "tables have columns the code no longer writes",
+            why: "The table has columns the current SQL does not produce: it was built by an earlier \
               version of the model and not rebuilt since. Those columns get no edge, because no \
               SQL writes them any more. Many at once usually mean the manifest and the catalog \
               were made against an environment whose tables are not kept up to date.",
-        action: "Rebuild these models in this target: dbt run --full-refresh -s <model>.",
-        // Not a model that does not parse or reads only itself: its missing
-        // columns are what that finding already says.
-        pick: |m| match m.parse_error.is_some() || m.reads_only_itself {
-            true => None,
-            false => some_list(m.missing_columns.iter().cloned()),
+            action: "Rebuild these models in this target: dbt run --full-refresh -s <model>.",
+            // Not a model that does not parse or reads only itself: its missing
+            // columns are what that finding already says.
+            pick: |m| match m.parse_error.is_some() || m.reads_only_itself {
+                true => None,
+                false => some_list(m.missing_columns.iter().cloned()),
+            },
+            columns: |m| m.missing_columns.len(),
         },
-        columns: |m| m.missing_columns.len(),
-    });
+    );
 
-    group(&mut out, report, Group {
-        category: "code_ahead_of_table",
-        owner: "project",
-        severity: "warning",
-        one: "table lacks columns the code writes",
-        many: "tables lack columns the code writes",
-        why: "The current SQL produces columns the table does not have: the code changed and the \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "code_ahead_of_table",
+            owner: "project",
+            severity: "warning",
+            one: "table lacks columns the code writes",
+            many: "tables lack columns the code writes",
+            why: "The current SQL produces columns the table does not have: the code changed and the \
               table was not rebuilt. Their edges are withheld, since no table holds them.",
-        action: "Rebuild these models in this target: dbt run -s <model>.",
-        pick: |m| some_list(m.unexpected_columns.iter().cloned()),
-        columns: |m| m.unexpected_columns.len(),
-    });
+            action: "Rebuild these models in this target: dbt run -s <model>.",
+            pick: |m| some_list(m.unexpected_columns.iter().cloned()),
+            columns: |m| m.unexpected_columns.len(),
+        },
+    );
 
-    group(&mut out, report, Group {
-        category: "thin_compile",
-        owner: "project",
-        severity: "info",
-        one: "compile produces far fewer columns than its YAML documents",
-        many: "compiles produce far fewer columns than their YAML documents",
-        why: "With no catalog to say which is right, either the YAML documents columns the model \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "thin_compile",
+            owner: "project",
+            severity: "info",
+            one: "compile produces far fewer columns than its YAML documents",
+            many: "compiles produce far fewer columns than their YAML documents",
+            why: "With no catalog to say which is right, either the YAML documents columns the model \
               no longer has, or a macro found its source missing at compile time and the compile \
               came out short.",
-        action: "Compare the YAML with the model's SQL, and build its sources in this target.",
-        pick: |m| match m.parse_error {
-            Some(_) => None,
-            None => m.thin.as_ref().map(|t| format!("{} of {} documented columns", t.computed, t.declared)),
+            action: "Compare the YAML with the model's SQL, and build its sources in this target.",
+            pick: |m| match m.parse_error {
+                Some(_) => None,
+                None => m.thin.as_ref().map(|t| format!("{} of {} documented columns", t.computed, t.declared)),
+            },
+            columns: |_| 0,
         },
-        columns: |_| 0,
-    });
+    );
 
-    group(&mut out, report, Group {
-        category: "reads_only_itself",
-        owner: "project",
-        severity: "info",
-        one: "model reads nothing but its own table",
-        many: "models read nothing but their own table",
-        why: "These models read no relation but their own: an incremental model that only adds to \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "reads_only_itself",
+            owner: "project",
+            severity: "info",
+            one: "model reads nothing but its own table",
+            many: "models read nothing but their own table",
+            why: "These models read no relation but their own: an incremental model that only adds to \
               itself, or a table a job outside dbt writes and dbt only creates. Their columns \
               have no parent in dbt, which is not a gap.",
-        action: "Nothing to fix for lineage. A table written outside dbt can be declared as a \
+            action: "Nothing to fix for lineage. A table written outside dbt can be declared as a \
                  source, which tells dbt what it is.",
-        pick: |m| m.reads_only_itself.then(String::new),
-        columns: |_| 0,
-    });
-
-    group(&mut out, report, Group {
-        category: "yaml_out_of_date",
-        owner: "project",
-        severity: "info",
-        one: "model's YAML disagrees with its table",
-        many: "models' YAML disagrees with their table",
-        why: "The columns documented in YAML are not the columns the table has. A documentation \
-              finding: lineage does not depend on it where the catalog has the table.",
-        action: "Update the columns documented in YAML.",
-        pick: |m| m.yaml_stale.then(String::new),
-        columns: |_| 0,
-    });
-
-    group(&mut out, report, Group {
-        category: "lineage_collin_lost",
-        owner: "collin",
-        severity: "warning",
-        one: "model has columns collin could not follow",
-        many: "models have columns collin could not follow",
-        why: "The SQL is trusted, and these columns came out with no edge and are not built from \
-              literals: collin or its engine lost the way back. Each says where the walk stopped.",
-        action: "Nothing to fix in the project. Worth reporting to collin when the SQL is \
-                 ordinary.",
-        pick: |m| {
-            some_list(m.lost_columns.iter().map(|l| {
-                let reasons: Vec<&str> = l.ends.iter().map(|e| e.reason).collect();
-                format!("{} ({})", l.column, reasons.join(", "))
-            }))
+            pick: |m| m.reads_only_itself.then(String::new),
+            columns: |_| 0,
         },
-        columns: |m| m.lost_columns.len(),
-    });
+    );
 
-    group(&mut out, report, Group {
-        category: "lineage_collin_partial",
-        owner: "collin",
-        severity: "warning",
-        one: "model has columns collin traced only in part",
-        many: "models have columns collin traced only in part",
-        why: "The SQL is trusted, and these columns have edges, but not all of what they are: \
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "yaml_out_of_date",
+            owner: "project",
+            severity: "info",
+            one: "model's YAML disagrees with its table",
+            many: "models' YAML disagrees with their table",
+            why: "The columns documented in YAML are not the columns the table has. A documentation \
+              finding: lineage does not depend on it where the catalog has the table.",
+            action: "Update the columns documented in YAML.",
+            pick: |m| m.yaml_stale.then(String::new),
+            columns: |_| 0,
+        },
+    );
+
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "lineage_collin_lost",
+            owner: "collin",
+            severity: "warning",
+            one: "model has columns collin could not follow",
+            many: "models have columns collin could not follow",
+            why: "The SQL is trusted, and these columns came out with no edge and are not built from \
+              literals: collin or its engine lost the way back. Each says where the walk stopped.",
+            action: "Nothing to fix in the project. Worth reporting to collin when the SQL is \
+                 ordinary.",
+            pick: |m| {
+                some_list(m.lost_columns.iter().map(|l| {
+                    let reasons: Vec<&str> = l.ends.iter().map(|e| e.reason).collect();
+                    format!("{} ({})", l.column, reasons.join(", "))
+                }))
+            },
+            columns: |m| m.lost_columns.len(),
+        },
+    );
+
+    group(
+        &mut out,
+        report,
+        Group {
+            category: "lineage_collin_partial",
+            owner: "collin",
+            severity: "warning",
+            one: "model has columns collin traced only in part",
+            many: "models have columns collin traced only in part",
+            why: "The SQL is trusted, and these columns have edges, but not all of what they are: \
               their expression reads a qualified name or a window key that collin did not follow, \
               so the edge for it is missing. Each says which name and why. A cut count of \
               expressions (`steps_capped`, edges all there) and a name a CTE lacks (a project \
               finding of its own) are in the report's entry and not counted here.",
-        action: "Nothing to fix in the project. Read the model's SQL for the names listed: the \
+            action: "Nothing to fix in the project. Read the model's SQL for the names listed: the \
                  edges alone are not all of the column. Worth reporting to collin when the SQL is \
                  ordinary.",
-        pick: |m| some_list(m.partial_columns.iter().filter_map(partial_detail)),
-        columns: |m| m.partial_columns.iter().filter_map(partial_detail).count(),
-    });
+            pick: |m| some_list(m.partial_columns.iter().filter_map(partial_detail)),
+            columns: |m| m.partial_columns.iter().filter_map(partial_detail).count(),
+        },
+    );
 
     out.sort_by_key(|f| {
         let at = |list: &[&str], v: &str| list.iter().position(|x| *x == v).unwrap_or(list.len());
@@ -348,8 +400,7 @@ fn count(n: usize, one: &str, many: &str) -> String {
 /// A partial column as the finding words it, or none when it has no gap that
 /// `PartialGap::is_loss` counts.
 fn partial_detail(p: &crate::report::PartialColumn) -> Option<String> {
-    let gaps: Vec<String> =
-        p.gaps.iter().filter(|g| g.is_loss()).map(|g| format!("{} {}", g.reason, g.name)).collect();
+    let gaps: Vec<String> = p.gaps.iter().filter(|g| g.is_loss()).map(|g| format!("{} {}", g.reason, g.name)).collect();
     (!gaps.is_empty()).then(|| format!("{} ({})", p.column, gaps.join(", ")))
 }
 
@@ -427,21 +478,14 @@ mod tests {
         only.unknown_sources = vec!["DB.LAND.EVENTS".into()];
         let found = of(&Report { models: vec![both, only], ..Default::default() });
 
-        let named = |f: &Finding| -> Vec<(String, String)> {
-            f.models.iter().map(|m| (m.name.clone(), m.detail.clone())).collect()
-        };
+        let named = |f: &Finding| -> Vec<(String, String)> { f.models.iter().map(|m| (m.name.clone(), m.detail.clone())).collect() };
         type Shape<'a> = (&'a str, &'a str, Vec<(String, String)>);
-        let shape: Vec<Shape<'_>> =
-            found.iter().map(|f| (f.category, f.owner, named(f))).collect();
+        let shape: Vec<Shape<'_>> = found.iter().map(|f| (f.category, f.owner, named(f))).collect();
         let pair = |name: &str, detail: &str| (name.to_string(), detail.to_string());
         assert_eq!(
             shape,
             vec![
-                (
-                    "source_without_columns",
-                    "inputs",
-                    vec![pair("both", "DB.LAND.EVENTS"), pair("only", "DB.LAND.EVENTS")]
-                ),
+                ("source_without_columns", "inputs", vec![pair("both", "DB.LAND.EVENTS"), pair("only", "DB.LAND.EVENTS")]),
                 ("parent_without_columns", "project", vec![pair("both", "DB.SEEDS.CODES")]),
             ]
         );
@@ -474,10 +518,8 @@ mod tests {
     #[test]
     fn a_partial_column_is_a_finding_of_its_own_beside_the_lost_one() {
         let mut partial = model("partial");
-        partial.partial_columns = vec![PartialColumn {
-            column: "z".into(),
-            gaps: vec![PartialGap { reason: "window_key_unbound", name: "nope".into() }],
-        }];
+        partial.partial_columns =
+            vec![PartialColumn { column: "z".into(), gaps: vec![PartialGap { reason: "window_key_unbound", name: "nope".into() }] }];
         let found = of(&Report { models: vec![partial], ..Default::default() });
         assert_eq!(found.len(), 1);
         assert_eq!((found[0].category, found[0].owner, found[0].columns), ("lineage_collin_partial", "collin", 1));
