@@ -55,6 +55,22 @@ done, so that whoever picks it up needs nothing but this tree.
    written as a lineage-library shape, has its literal in the cache.
 8. **On hold: BigQuery**, not a priority for now. Its gaps are the engine's
    STRUCT fields, `UNNEST` and `PIVOT` (On public projects, below).
+9. **Run the `tools/` scripts the linters touched.** Ruff and `py_compile`
+   checked their fixes, but the scripts read projects outside this repository
+   and were not run. Run each once before its next measurement.
+10. **Drop the three `tools/` switches in `ruff.toml`**: `SIM115` for
+    `tools/*.py`, `E701` in `bq_causes.py`, `B023` in `classify.py`. Each goes
+    when its script is rewritten (0056).
+11. **A pinned Ruff and ShellCheck for Linux arm64 and Windows.**
+    `scripts/lint.py` has none and exits 2 there. Done when each platform has
+    its build and SHA-256 in the script.
+12. **A Rust toolchain pin, if a red push from a new lint becomes a nuisance.**
+    A new stable Clippy can fail a push on the day's new lints, since nothing
+    pins the toolchain (0054). Only the default lint groups run, not
+    `pedantic` or `nursery`.
+13. **The engine fork is neither formatted nor linted here.** The
+    lineage-library submodule keeps its own checks (0028); rustfmt, Clippy and
+    `lint.py` leave it alone.
 
 The precision, coverage and audit figures below were measured with the
 scripts in [`tools/`](../tools/README.md).
