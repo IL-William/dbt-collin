@@ -1,0 +1,6 @@
+# Commits that only reformat, for `git blame` to look past. GitHub reads this
+# file by itself; a clone needs:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Format the Rust code with rustfmt (#56, 0055)
+427a139e598d305d04381b1fc24b5586b7c01f76

@@ -1,0 +1,22 @@
+# Run by scripts/lint.py with the Ruff it pins (0056). Rules that catch bugs;
+# nothing here formats: Ruff's formatter is never run.
+target-version = "py310"
+
+[lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "RUF", "PLE", "PLW"]
+ignore = [
+    # The scripts' comments and long literals are written to the width the code
+    # is, not wrapped to a limit.
+    "E501",
+]
+
+[lint.per-file-ignores]
+# `json.load(open(path))` reads and `json.dump(x, open(path, "w"))` writes in
+# the one-shot measurement scripts: each handle is closed by CPython at the end
+# of its statement and the process ends soon after, so a `with` adds nothing.
+"tools/*.py" = ["SIM115"]
+# One-line `if c ...: k = "..."` branches that read as a table of causes.
+"tools/bq_causes.py" = ["E701"]
+# `cause` is defined and called in the same loop iteration, so the loop
+# variables it reads are never a later one's.
+"tools/classify.py" = ["B023"]

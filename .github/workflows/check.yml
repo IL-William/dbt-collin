@@ -68,3 +68,16 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo install cargo-audit --locked
       - run: cargo audit
+
+  # Ruff and ShellCheck (0056), each fetched by scripts/lint.py at a pinned
+  # version and checked against a pinned SHA-256, so this runs what a checkout
+  # runs. Not on the Monday run, which is for advisories: nothing here changes
+  # without a push, and a linter's download failing must not turn it red.
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 scripts/lint.py --github

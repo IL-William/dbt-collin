@@ -6,7 +6,6 @@ Private: model names stay in OUT_JSON, never in the collin repository.
 import collections
 import json
 import os
-import re
 import sys
 
 import sqlglot
@@ -105,7 +104,7 @@ for f in sorted(os.listdir(dump_dir)):
     produced = {e["to_col"] for e in d.get("published") or []}
     outputs = set(d.get("outputs") or [])
     roots = set(d.get("roots") or [])
-    lost = {l["column"]: l["ends"] for l in d.get("lost_ends") or []}
+    lost = {x["column"]: x["ends"] for x in d.get("lost_ends") or []}
     wh = d.get("warehouse")
     decl = d.get("declared")
     plan = d.get("plan")

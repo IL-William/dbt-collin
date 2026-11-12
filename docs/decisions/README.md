@@ -60,6 +60,7 @@ is built this way, for whoever changes it next.
 | [0052](0052-a-release-is-checked-on-virustotal-before-it-is-published.md) | A release is checked on VirusTotal before it is published | changing what the release workflow does between the build and the publication, the `VIRUSTOTAL_API_KEY` secret, or the override that publishes a flagged release |
 | [0054](0054-clippy-runs-on-stable-with-every-lint-an-error.md) | Clippy runs on stable with every lint an error | silencing a Clippy lint, adding an `#[allow]`, changing the Clippy step of the `rust` job in CI, or pinning a Rust toolchain |
 | [0055](0055-collin-is-formatted-by-rustfmt-with-a-packed-config.md) | collin is formatted by rustfmt with a packed config | changing `rustfmt.toml`, resolving a conflict in formatted Rust, or formatting a file the fork or a fixture owns |
+| [0056](0056-the-python-and-shell-are-linted-by-pinned-tools.md) | The Python and the shell are linted by pinned tools, fetched by hash | adding or changing a linter rule, bumping Ruff or ShellCheck, or adding a file type or a folder the linters should cover |
 
 ## The other side of the boundary
 

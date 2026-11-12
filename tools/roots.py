@@ -4,7 +4,11 @@ usage: python3 -I roots.py MANIFEST DUMP_DIR
 A root is 'real' when every path ends at a literal; 'reads_table' when some path reaches
 a column of a relation that is not a CTE: a candidate false root.
 """
-import json, os, sys, collections
+import collections
+import json
+import os
+import sys
+
 import sqlglot
 from sqlglot import exp
 
@@ -61,7 +65,7 @@ def classify(sql, col):
                     break
             if hit is None:
                 # through a star
-                for alias, (kind, what) in srcs.items():
+                for _alias, (kind, what) in srcs.items():
                     if kind == "table" and what in ctes:
                         column_in(ctes[what], name, depth + 1)
                     elif kind == "sub":

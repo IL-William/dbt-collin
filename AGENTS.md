@@ -10,6 +10,7 @@ git submodule update --init      # once: fixtures/lineage-library
 cargo fmt --check
 cargo test
 cargo clippy --workspace --all-targets --locked -- -D warnings
+python3 scripts/lint.py          # Ruff on tools/ and scripts/, ShellCheck on the fixtures' scripts
 ```
 
 Run `cargo fmt` first: the code is formatted by `rustfmt.toml` (0055), and
@@ -25,6 +26,10 @@ committed beside them (0038). A change that moves an edge fails it. One meant to
 is accepted with `COLLIN_BLESS=1 cargo test --release committed_beside`, and
 the diff of `expected/` goes into the pull request. Neither is Snowflake, so
 they do not replace what follows.
+
+`scripts/lint.py` runs Ruff and ShellCheck at the versions CI runs, each fetched
+from its release and checked against a SHA-256 pinned in the script (0056).
+Offline with nothing cached it exits 2: skipped, not failed.
 
 Then, against a demo project outside this tree:
 

@@ -3,7 +3,11 @@
 usage: python3 -I audit_kit.py MANIFEST DUMP_DIR OUT_DIR SEED
 Private: model names stay in OUT_DIR, never in the collin repository.
 """
-import json, os, random, sys, collections
+import collections
+import json
+import os
+import random
+import sys
 manifest, dump_dir, out, seed = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 m = json.load(open(manifest))
 nodes = {**m["nodes"], **m["sources"]}
