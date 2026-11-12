@@ -1,0 +1,6 @@
+# Wide and packed, as the walk and its tests were written by hand: the defaults
+# would add a fifth to the lines, this moves about a tenth of them (0055).
+max_width = 140
+use_small_heuristics = "Max"
+fn_params_layout = "Compressed"
+short_array_element_width_threshold = 40

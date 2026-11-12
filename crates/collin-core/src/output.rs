@@ -51,13 +51,11 @@ pub fn replace(path: &Path, text: &str) -> Result<(), String> {
     let written = file.write_all(text.as_bytes());
     // Closed before the rename: Windows will not move an open file.
     drop(file);
-    written
-        .and_then(|()| std::fs::rename(&tmp, path))
-        .map_err(|e| {
-            // A temporary file left in `target/` is noise; best effort.
-            let _ = std::fs::remove_file(&tmp);
-            format!("cannot write {}: {e}", path.display())
-        })
+    written.and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
+        // A temporary file left in `target/` is noise; best effort.
+        let _ = std::fs::remove_file(&tmp);
+        format!("cannot write {}: {e}", path.display())
+    })
 }
 
 #[cfg(test)]

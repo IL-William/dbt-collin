@@ -61,8 +61,7 @@ fn stamp(root: &Path, repo: &Git) -> String {
     };
     // Without the optional locks status leaves the index alone. Rewriting it
     // would touch a watched path and rerun this script on the next build.
-    let dirty = git(root, &["--no-optional-locks", "status", "--porcelain", "--untracked-files=no"])
-        .is_some_and(|s| !s.is_empty());
+    let dirty = git(root, &["--no-optional-locks", "status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
     if dirty {
         format!("{hash}-dirty")
     } else {

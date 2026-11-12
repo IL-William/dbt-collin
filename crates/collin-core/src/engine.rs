@@ -14,12 +14,11 @@
 
 use flowscope_core::analyzer::helpers::line_col_to_offset;
 use flowscope_core::types::{
-    issue_codes, AnalyzeRequest, ColumnSchema, Dialect, EdgeType, FilterClauseType, Node as FsNode,
-    NodeType, SchemaMetadata, SchemaTable, Severity,
+    issue_codes, AnalyzeRequest, ColumnSchema, Dialect, EdgeType, FilterClauseType, Node as FsNode, NodeType, SchemaMetadata, SchemaTable,
+    Severity,
 };
 use sqlparser::ast::{
-    Expr, Query, SelectItem, SetExpr, SetOperator, Statement, TableFactor, Visit, VisitMut, Visitor, VisitorMut,
-    WindowType,
+    Expr, Query, SelectItem, SetExpr, SetOperator, Statement, TableFactor, Visit, VisitMut, Visitor, VisitorMut, WindowType,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -464,9 +463,7 @@ impl Visitor for ScopeNames {
 /// comes out of an `EXCEPT`.
 fn branches(body: &SetExpr) -> usize {
     match body {
-        SetExpr::SetOperation { op: SetOperator::Union, left, right, .. } => {
-            branches(left).saturating_add(branches(right))
-        }
+        SetExpr::SetOperation { op: SetOperator::Union, left, right, .. } => branches(left).saturating_add(branches(right)),
         SetExpr::SetOperation { .. } => usize::MAX,
         SetExpr::Query(q) => branches(&q.body),
         _ => 1,
@@ -479,9 +476,7 @@ fn star_sources(query: &Query) -> Vec<String> {
     fn body(expr: &SetExpr, out: &mut Vec<String>) {
         match expr {
             SetExpr::Select(select) => {
-                let star = select.projection.iter().any(|item| {
-                    matches!(item, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..))
-                });
+                let star = select.projection.iter().any(|item| matches!(item, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..)));
                 if !star {
                     return;
                 }
@@ -560,9 +555,7 @@ impl<'a> PredicateSubqueries<'a> {
                 self.walk(left);
                 self.walk(right);
             }
-            Expr::UnaryOp { expr, .. } | Expr::Nested(expr) | Expr::IsNull(expr) | Expr::IsNotNull(expr) => {
-                self.walk(expr)
-            }
+            Expr::UnaryOp { expr, .. } | Expr::Nested(expr) | Expr::IsNull(expr) | Expr::IsNotNull(expr) => self.walk(expr),
             Expr::Between { expr, low, high, .. } => {
                 self.walk(expr);
                 self.walk(low);
@@ -623,10 +616,9 @@ fn select_sources(select: &sqlparser::ast::Select) -> Vec<(String, Option<String
         let factors = std::iter::once(&from.relation).chain(from.joins.iter().map(|j| &j.relation));
         for factor in factors {
             match factor {
-                TableFactor::Table { name, alias, .. } => sources.push((
-                    name.to_string().to_lowercase(),
-                    alias.as_ref().map(|a| a.name.value.to_lowercase()),
-                )),
+                TableFactor::Table { name, alias, .. } => {
+                    sources.push((name.to_string().to_lowercase(), alias.as_ref().map(|a| a.name.value.to_lowercase())))
+                }
                 TableFactor::Derived { alias: Some(alias), .. } => {
                     let a = alias.name.value.to_lowercase();
                     sources.push((a.clone(), Some(a)));
@@ -769,10 +761,9 @@ impl Visitor for ExprNames {
         if self.depth == 0 {
             match expr {
                 Expr::Identifier(i) => self.names.push((None, i.value.to_lowercase())),
-                Expr::CompoundIdentifier(parts) if parts.len() >= 2 => self.names.push((
-                    Some(parts[parts.len() - 2].value.to_lowercase()),
-                    parts[parts.len() - 1].value.to_lowercase(),
-                )),
+                Expr::CompoundIdentifier(parts) if parts.len() >= 2 => {
+                    self.names.push((Some(parts[parts.len() - 2].value.to_lowercase()), parts[parts.len() - 1].value.to_lowercase()))
+                }
                 _ => {}
             }
         }
@@ -827,11 +818,7 @@ impl Qualifies {
                         self.enclosing.insert(address, chain.clone());
                     }
                 }
-                let clauses = select
-                    .selection
-                    .iter()
-                    .map(|p| ("WHERE", p))
-                    .chain(select.having.iter().map(|p| ("HAVING", p)));
+                let clauses = select.selection.iter().map(|p| ("WHERE", p)).chain(select.having.iter().map(|p| ("HAVING", p)));
                 for (clause, predicate) in clauses {
                     self.predicates.push(Predicate {
                         clause,
@@ -871,10 +858,21 @@ impl Qualifies {
                     for join in &from.joins {
                         use sqlparser::ast::{JoinConstraint, JoinOperator as J};
                         let constraint = match &join.join_operator {
-                            J::Join(c) | J::Inner(c) | J::Left(c) | J::LeftOuter(c) | J::Right(c)
-                            | J::RightOuter(c) | J::FullOuter(c) | J::CrossJoin(c) | J::Semi(c)
-                            | J::LeftSemi(c) | J::RightSemi(c) | J::Anti(c) | J::LeftAnti(c)
-                            | J::RightAnti(c) | J::StraightJoin(c) => Some(c),
+                            J::Join(c)
+                            | J::Inner(c)
+                            | J::Left(c)
+                            | J::LeftOuter(c)
+                            | J::Right(c)
+                            | J::RightOuter(c)
+                            | J::FullOuter(c)
+                            | J::CrossJoin(c)
+                            | J::Semi(c)
+                            | J::LeftSemi(c)
+                            | J::RightSemi(c)
+                            | J::Anti(c)
+                            | J::LeftAnti(c)
+                            | J::RightAnti(c)
+                            | J::StraightJoin(c) => Some(c),
                             J::AsOf { constraint, .. } => Some(constraint),
                             _ => None,
                         };
@@ -1185,8 +1183,7 @@ fn scopes(sql: &str, dialect: Dialect) -> Scopes {
         for (name, count) in &names.unions {
             out.branches.entry(name.clone()).and_modify(|c| *c = (*c).max(*count)).or_insert(*count);
         }
-        let ctes: HashSet<String> =
-            names.ctes.iter().map(|c| c.trim_matches('"').to_lowercase()).collect();
+        let ctes: HashSet<String> = names.ctes.iter().map(|c| c.trim_matches('"').to_lowercase()).collect();
         out.values.extend(names.values.iter().cloned());
         out.flattens.extend(names.flattens.iter().cloned());
         for (scope, sources) in &names.stars {
@@ -1199,12 +1196,7 @@ fn scopes(sql: &str, dialect: Dialect) -> Scopes {
             for name in list {
                 *counts.entry(name).or_default() += 1;
             }
-            out.merged.extend(
-                counts
-                    .into_iter()
-                    .filter(|(_, count)| *count > 1)
-                    .map(|(name, count)| MergedScope { kind, name, count }),
-            );
+            out.merged.extend(counts.into_iter().filter(|(_, count)| *count > 1).map(|(name, count)| MergedScope { kind, name, count }));
         }
     }
     out
@@ -1265,11 +1257,7 @@ fn as_table(relation: &str, columns: &[String]) -> SchemaTable {
         0 => (None, None, ""),
         1 => (None, None, parts[0]),
         2 => (None, Some(parts[0]), parts[1]),
-        _ => (
-            Some(parts[parts.len() - 3]),
-            Some(parts[parts.len() - 2]),
-            parts[parts.len() - 1],
-        ),
+        _ => (Some(parts[parts.len() - 3]), Some(parts[parts.len() - 2]), parts[parts.len() - 1]),
     };
     SchemaTable {
         catalog: catalog.map(str::to_string),
@@ -1277,12 +1265,7 @@ fn as_table(relation: &str, columns: &[String]) -> SchemaTable {
         name: name.to_string(),
         columns: columns
             .iter()
-            .map(|c| ColumnSchema {
-                name: c.clone(),
-                data_type: None,
-                is_primary_key: None,
-                foreign_key: None,
-            })
+            .map(|c| ColumnSchema { name: c.clone(), data_type: None, is_primary_key: None, foreign_key: None })
             .collect(),
     }
 }
@@ -1334,9 +1317,8 @@ fn synthesised(label: &str, expr: &str) -> bool {
 /// edge that already exists, and never invents a column.
 fn columns_named_in(expr: &str, known: &HashSet<String>) -> Vec<String> {
     const KEYWORDS: &[&str] = &[
-        "and", "as", "asc", "between", "by", "case", "cast", "current", "desc", "distinct",
-        "else", "end", "following", "from", "group", "having", "in", "interval", "is", "like",
-        "not", "null", "on", "or", "order", "over", "partition", "preceding", "range", "row",
+        "and", "as", "asc", "between", "by", "case", "cast", "current", "desc", "distinct", "else", "end", "following", "from", "group",
+        "having", "in", "interval", "is", "like", "not", "null", "on", "or", "order", "over", "partition", "preceding", "range", "row",
         "rows", "select", "then", "unbounded", "using", "when", "where",
     ];
     let bytes = expr.as_bytes();
@@ -1356,9 +1338,7 @@ fn columns_named_in(expr: &str, known: &HashSet<String>) -> Vec<String> {
                 let quoted = c == b'"';
                 let start = i + usize::from(quoted);
                 let mut j = start;
-                while j < bytes.len()
-                    && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'$')
-                {
+                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'$') {
                     j += 1;
                 }
                 let word = expr[start..j].to_lowercase();
@@ -1369,11 +1349,7 @@ fn columns_named_in(expr: &str, known: &HashSet<String>) -> Vec<String> {
                 // A name before `(` is a function, and one before `.` qualifies
                 // the column rather than being it.
                 let structural = matches!(bytes.get(k), Some(b'(') | Some(b'.'));
-                if !structural
-                    && !KEYWORDS.contains(&word.as_str())
-                    && known.contains(&word)
-                    && !out.contains(&word)
-                {
+                if !structural && !KEYWORDS.contains(&word.as_str()) && known.contains(&word) && !out.contains(&word) {
                     out.push(word);
                 }
                 i = j + usize::from(quoted);
@@ -1478,10 +1454,7 @@ fn unresolved_relation(code: &str, message: &str, spelled: Option<&str>) -> Opti
     if code != issue_codes::UNRESOLVED_REFERENCE {
         return None;
     }
-    let named = message
-        .strip_prefix("Table '")
-        .and_then(|rest| rest.split_once("' could not be resolved"))
-        .map(|(name, _)| name);
+    let named = message.strip_prefix("Table '").and_then(|rest| rest.split_once("' could not be resolved")).map(|(name, _)| name);
     let name = named.or_else(|| spelled.filter(|s| qualified_parts(s).len() > 1))?;
     Some(norm_relation(name))
 }
@@ -1609,12 +1582,7 @@ struct Graph<'r, 'm> {
 impl<'r> Graph<'r, '_> {
     /// Walks back from `id` the way `resolve` does, carrying `text`, the
     /// expression the node was reached with.
-    fn ends(
-        &self,
-        id: &'r str,
-        text: Option<&'r str>,
-        seen: &mut HashMap<(&'r str, Option<&'r str>), Option<Ends>>,
-    ) -> Ends {
+    fn ends(&self, id: &'r str, text: Option<&'r str>, seen: &mut HashMap<(&'r str, Option<&'r str>), Option<Ends>>) -> Ends {
         match seen.get(&(id, text)) {
             Some(Some(done)) => return done.clone(),
             // A loop: the first visit speaks for the node.
@@ -1627,12 +1595,7 @@ impl<'r> Graph<'r, '_> {
         out
     }
 
-    fn ends_of(
-        &self,
-        id: &'r str,
-        text: Option<&'r str>,
-        seen: &mut HashMap<(&'r str, Option<&'r str>), Option<Ends>>,
-    ) -> Ends {
+    fn ends_of(&self, id: &'r str, text: Option<&'r str>, seen: &mut HashMap<(&'r str, Option<&'r str>), Option<Ends>>) -> Ends {
         let unresolved = || Ends::dead_end(DeadEnd::Unresolved);
         let literal = Ends { literal: 1, ..Default::default() };
         let Some(node) = self.by_id.get(id) else { return unresolved() };
@@ -1653,10 +1616,8 @@ impl<'r> Graph<'r, '_> {
             let mut out = Ends::default();
             let mut went = false;
             if let (Some(cols), Some(t)) = (self.owned.get(id), said) {
-                let labels: HashMap<String, &str> = cols
-                    .iter()
-                    .filter_map(|c| self.by_id.get(c).map(|n| (n.label.to_lowercase(), *c)))
-                    .collect();
+                let labels: HashMap<String, &str> =
+                    cols.iter().filter_map(|c| self.by_id.get(c).map(|n| (n.label.to_lowercase(), *c))).collect();
                 let names: HashSet<String> = labels.keys().cloned().collect();
                 for want in columns_named_in(t, &names) {
                     if let Some(next) = labels.get(&want) {
@@ -1692,10 +1653,8 @@ impl<'r> Graph<'r, '_> {
         }
         let own = node.expression.as_deref().filter(|e| !e.trim().is_empty());
         for t in own.into_iter().chain(ups.iter().filter_map(|u| u.2)) {
-            let names: Vec<String> = read_names(t, self.vocabulary, self.tables)
-                .into_iter()
-                .filter(|n| !below.labels.contains(n))
-                .collect();
+            let names: Vec<String> =
+                read_names(t, self.vocabulary, self.tables).into_iter().filter(|n| !below.labels.contains(n)).collect();
             if !names.is_empty() {
                 below.unreached = true;
                 below.dead.push(DeadEnd::NamesUnreached { names });
@@ -1710,9 +1669,7 @@ impl<'r> Graph<'r, '_> {
             // one reading a name the engine never placed, the guard above has
             // it: both losses.
             let reads_nothing = owner.is_none_or(|o| self.feeds.get(o).is_none_or(Vec::is_empty));
-            let via = owner
-                .and_then(|o| self.by_id.get(o).map(|n| (*o, n)))
-                .filter(|(_, n)| n.node_type != NodeType::Output);
+            let via = owner.and_then(|o| self.by_id.get(o).map(|n| (*o, n))).filter(|(_, n)| n.node_type != NodeType::Output);
             if own.is_some() && (reads_nothing || !below.unreached) {
                 below.absorb(literal);
             } else if let (None, Some((o, n))) = (own, via) {
@@ -1858,8 +1815,7 @@ impl<'r> Graph<'r, '_> {
                         known.is_some_and(|columns| columns_named_in(text, columns).is_empty())
                     } else {
                         let cols = self.owned.get(from).into_iter().flatten();
-                        let columns: HashSet<String> =
-                            cols.filter_map(|c| self.by_id.get(c)).map(|n| n.label.to_lowercase()).collect();
+                        let columns: HashSet<String> = cols.filter_map(|c| self.by_id.get(c)).map(|n| n.label.to_lowercase()).collect();
                         columns_named_in(text, &columns).is_empty()
                     };
                     let bare = names_none && literal(text);
@@ -1907,11 +1863,9 @@ impl<'r> Unbacked<'r, '_> {
     /// A column the engine made for a CTE because a scope read it, with
     /// nothing feeding it and no expression.
     fn phantom(&self, id: &str) -> bool {
-        self.by_id.get(id).is_some_and(|n| {
-            n.node_type == NodeType::Column
-                && n.expression.is_none()
-                && self.feeds.get(id).is_none_or(Vec::is_empty)
-        })
+        self.by_id
+            .get(id)
+            .is_some_and(|n| n.node_type == NodeType::Column && n.expression.is_none() && self.feeds.get(id).is_none_or(Vec::is_empty))
     }
 
     /// The names the feed from `from` reads out of a CTE that does not
@@ -1938,12 +1892,8 @@ impl<'r> Unbacked<'r, '_> {
                     .filter(|c| !self.phantom(c))
                     .filter_map(|c| self.by_id.get(c).map(|n| n.label.to_lowercase()))
                     .collect();
-                let under: HashSet<String> = relations_under(self.by_id, self.feeds, from)
-                    .iter()
-                    .filter_map(|r| self.known.get(r))
-                    .flatten()
-                    .cloned()
-                    .collect();
+                let under: HashSet<String> =
+                    relations_under(self.by_id, self.feeds, from).iter().filter_map(|r| self.known.get(r)).flatten().cloned().collect();
                 let names = columns_named_in(text, &under).into_iter().filter(|n| !projected.contains(n));
                 (from, names.collect())
             }
@@ -1973,11 +1923,7 @@ impl<'r> Unbacked<'r, '_> {
         names
             .into_iter()
             .map(|column| {
-                let owners = under
-                    .iter()
-                    .filter(|r| self.known.get(*r).is_some_and(|k| k.contains(&column)))
-                    .cloned()
-                    .collect();
+                let owners = under.iter().filter(|r| self.known.get(*r).is_some_and(|k| k.contains(&column))).cloned().collect();
                 (label.clone(), column, owners)
             })
             .collect()
@@ -1987,19 +1933,11 @@ impl<'r> Unbacked<'r, '_> {
 /// The base columns a column of a CTE or derived table comes from, following
 /// the engine's column to column edges back to a relation, renames included.
 fn scope_column_sources<'r>(
-    by_id: &HashMap<&'r str, &'r FsNode>,
-    owner: &HashMap<&'r str, &'r str>,
-    owned: &HashMap<&'r str, Vec<&'r str>>,
-    feeds: &Feeds<'r>,
-    scope: &'r str,
-    column: &str,
+    by_id: &HashMap<&'r str, &'r FsNode>, owner: &HashMap<&'r str, &'r str>, owned: &HashMap<&'r str, Vec<&'r str>>, feeds: &Feeds<'r>,
+    scope: &'r str, column: &str,
 ) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    let start = owned
-        .get(scope)
-        .into_iter()
-        .flatten()
-        .filter(|c| by_id.get(*c).is_some_and(|n| n.label.eq_ignore_ascii_case(column)));
+    let start = owned.get(scope).into_iter().flatten().filter(|c| by_id.get(*c).is_some_and(|n| n.label.eq_ignore_ascii_case(column)));
     let mut stack: Vec<&'r str> = start.copied().collect();
     let mut seen: HashSet<&'r str> = HashSet::new();
     while let Some(at) = stack.pop() {
@@ -2025,11 +1963,7 @@ fn scope_column_sources<'r>(
 
 /// Every relation a CTE reads, through the CTEs it reads in turn, normalised
 /// and sorted.
-fn relations_under<'r>(
-    by_id: &HashMap<&'r str, &'r FsNode>,
-    feeds: &Feeds<'r>,
-    id: &'r str,
-) -> Vec<String> {
+fn relations_under<'r>(by_id: &HashMap<&'r str, &'r FsNode>, feeds: &Feeds<'r>, id: &'r str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut stack: Vec<&'r str> = vec![id];
     let mut seen: HashSet<&'r str> = HashSet::new();
@@ -2250,10 +2184,7 @@ fn put_edge(edges: &mut Vec<RawEdge>, at: &mut HashMap<(String, String, String),
         }
         Some(&i) => {
             let held = &edges[i].expression;
-            let (was, now) = (
-                crate::role::of_expression(held).rank(),
-                crate::role::of_expression(&edge.expression).rank(),
-            );
+            let (was, now) = (crate::role::of_expression(held).rank(), crate::role::of_expression(&edge.expression).rank());
             if now > was || (now == was && edge.expression > *held) {
                 edges[i].expression = edge.expression;
             }
@@ -2317,20 +2248,11 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         (at(a), &a.code, &a.message).cmp(&(at(b), &b.code, &b.message))
     });
     out.approximate = out.issues.iter().any(|i| i.degrading);
-    out.unknown_columns = out
-        .issues
-        .iter()
-        .filter(|i| i.code == issue_codes::UNKNOWN_COLUMN)
-        .map(|i| unknown_column(&i.message))
-        .collect();
+    out.unknown_columns = out.issues.iter().filter(|i| i.code == issue_codes::UNKNOWN_COLUMN).map(|i| unknown_column(&i.message)).collect();
     if res.statements.is_empty() {
         // The first error is the one that stopped the parse; a later warning
         // describes the wreckage rather than the cause.
-        let first = out
-            .issues
-            .iter()
-            .find(|i| i.severity == "error")
-            .or_else(|| out.issues.first());
+        let first = out.issues.iter().find(|i| i.severity == "error").or_else(|| out.issues.first());
         out.parse_error = Some(match first {
             Some(i) if i.message.is_empty() => i.code.clone(),
             Some(i) => format!("{}: {}", i.code, i.message),
@@ -2350,32 +2272,19 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         predicates,
         orderings,
         selects: _,
-    } =
-        scopes(sql, split_dialect(adapter));
+    } = scopes(sql, split_dialect(adapter));
     out.merged_scopes = merged;
 
     let by_id: HashMap<&str, &FsNode> = res.nodes.iter().map(|n| (&*n.id, n)).collect();
 
-    let mut reads: Vec<String> = res
-        .nodes
-        .iter()
-        .filter(|n| n.node_type.is_table_or_view())
-        .filter_map(owning_relation)
-        .collect();
+    let mut reads: Vec<String> = res.nodes.iter().filter(|n| n.node_type.is_table_or_view()).filter_map(owning_relation).collect();
     reads.sort();
     reads.dedup();
     out.reads = reads;
 
     // What each relation really has, to check a recovered column name against.
-    let known: HashMap<String, HashSet<String>> = visible
-        .iter()
-        .map(|v| {
-            (
-                norm_relation(&v.relation),
-                v.columns.iter().map(|c| c.to_lowercase()).collect(),
-            )
-        })
-        .collect();
+    let known: HashMap<String, HashSet<String>> =
+        visible.iter().map(|v| (norm_relation(&v.relation), v.columns.iter().map(|c| c.to_lowercase()).collect())).collect();
 
     // Every column name some relation has, and every relation's last name part:
     // what a qualified read is weighed against to be claimed as a column (0051).
@@ -2386,13 +2295,8 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     let mut no_claim = anywhere.clone();
     no_claim.extend(values.iter().cloned());
     no_claim.extend(flattens.iter().cloned());
-    let tables: HashSet<String> = out
-        .reads
-        .iter()
-        .chain(known.keys())
-        .filter_map(|r| r.rsplit('.').next())
-        .map(str::to_lowercase)
-        .collect();
+    let tables: HashSet<String> =
+        out.reads.iter().chain(known.keys()).filter_map(|r| r.rsplit('.').next()).map(str::to_lowercase).collect();
 
     // Ownership tells which table, CTE or output a column hangs off, and the
     // inverse says which columns a CTE has, which is how a derivation hung off
@@ -2412,22 +2316,13 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         match e.edge_type {
             EdgeType::DataFlow | EdgeType::Derivation => {
                 let derived = e.edge_type == EdgeType::Derivation;
-                feeds.entry(&e.to).or_default().push((
-                    &e.from,
-                    derived,
-                    e.expression.as_deref(),
-                ));
+                feeds.entry(&e.to).or_default().push((&e.from, derived, e.expression.as_deref()));
             }
             _ => {}
         }
     }
 
-    let output_ids: HashSet<&str> = res
-        .nodes
-        .iter()
-        .filter(|n| n.node_type == NodeType::Output)
-        .map(|n| &*n.id)
-        .collect();
+    let output_ids: HashSet<&str> = res.nodes.iter().filter(|n| n.node_type == NodeType::Output).map(|n| &*n.id).collect();
 
     let mut seen_output: HashSet<String> = HashSet::new();
     // One edge per column pair, the loudest expression any path gave it: see
@@ -2447,14 +2342,10 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     let mut expr_of: HashMap<String, String> = HashMap::new();
     let mut nodes_of: HashMap<String, Vec<&str>> = HashMap::new();
 
-    let ctes: HashMap<String, Vec<&str>> = res
-        .nodes
-        .iter()
-        .filter(|n| n.node_type == NodeType::Cte)
-        .fold(HashMap::new(), |mut m, n| {
-            m.entry(n.label.to_lowercase()).or_insert_with(Vec::new).push(&*n.id);
-            m
-        });
+    let ctes: HashMap<String, Vec<&str>> = res.nodes.iter().filter(|n| n.node_type == NodeType::Cte).fold(HashMap::new(), |mut m, n| {
+        m.entry(n.label.to_lowercase()).or_insert_with(Vec::new).push(&*n.id);
+        m
+    });
     // The ordering keys of the column `id`, whose expression is `text`, each
     // bound in the `SELECT` that writes it: an edge for a key of a relation,
     // the column to walk on from for a key of a CTE or derived table. `None`
@@ -2550,10 +2441,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         nodes_of.entry(to_column.clone()).or_default().push(&col.id);
         if seen_output.insert(to_column.clone()) {
             out.outputs.push(to_column.clone());
-            expr_of.insert(
-                to_column.clone(),
-                col.expression.as_deref().unwrap_or_default().to_string(),
-            );
+            expr_of.insert(to_column.clone(), col.expression.as_deref().unwrap_or_default().to_string());
         }
 
         // Walk back through CTE and subquery columns until a real relation is
@@ -2567,8 +2455,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         // whose names are another scope's columns.
         // The fifth is the expressions met so far (`RawEdge::steps`).
         type Step<'a> = (&'a str, bool, Option<&'a str>, Option<&'a str>, u32);
-        let mut stack: Vec<Step<'_>> =
-            vec![(&col.id, false, col.expression.as_deref(), col.expression.as_deref(), 0)];
+        let mut stack: Vec<Step<'_>> = vec![(&col.id, false, col.expression.as_deref(), col.expression.as_deref(), 0)];
         // Keyed by the whole state, so that a node two paths reach is read for
         // each text and weighed for each role: the first path to arrive must
         // not decide either (0009, 0031). The count of expressions met is in the
@@ -2640,10 +2527,8 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                 // the scope, which that relation does not say it is.
                 if node.node_type == NodeType::Cte {
                     if let (Some(cols), Some(text)) = (owned.get(id), reading) {
-                        let labels: HashMap<String, &str> = cols
-                            .iter()
-                            .filter_map(|c| by_id.get(c).map(|n| (n.label.to_lowercase(), *c)))
-                            .collect();
+                        let labels: HashMap<String, &str> =
+                            cols.iter().filter_map(|c| by_id.get(c).map(|n| (n.label.to_lowercase(), *c))).collect();
                         let names: HashSet<String> = labels.keys().cloned().collect();
                         for want in columns_named_in(text, &names) {
                             if let Some(next) = labels.get(&want) {
@@ -2729,10 +2614,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                     let held = if derived { expr } else { None };
                     let text = match (held, *edge_expr) {
                         (Some(a), Some(b)) => {
-                            let (ra, rb) = (
-                                crate::role::of_expression(a).rank(),
-                                crate::role::of_expression(b).rank(),
-                            );
+                            let (ra, rb) = (crate::role::of_expression(a).rank(), crate::role::of_expression(b).rank());
                             Some(if rb > ra { b } else { a })
                         }
                         (a, b) => a.or(b),
@@ -2793,9 +2675,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                 OrderingKey::Walk(next) => stack.push((next, true, text, None, steps)),
                             }
                         }
-                    } else if let (Some(own), Some(scope)) =
-                        (*edge_expr, owner.get(from).and_then(|o| by_id.get(o).map(|n| (*o, *n))))
-                    {
+                    } else if let (Some(own), Some(scope)) = (*edge_expr, owner.get(from).and_then(|o| by_id.get(o).map(|n| (*o, *n)))) {
                         for body in over_clauses(own) {
                             if scope.1.node_type.is_table_or_view() {
                                 let Some(rel) = owning_relation(scope.1) else { continue };
@@ -2839,10 +2719,8 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                                         stack.push((next, true, text, Some(own), steps));
                                     }
                                 }
-                                let lost: Vec<String> = claimable_tails(body, &no_claim, &tables)
-                                    .into_iter()
-                                    .filter(|n| !names.contains(n))
-                                    .collect();
+                                let lost: Vec<String> =
+                                    claimable_tails(body, &no_claim, &tables).into_iter().filter(|n| !names.contains(n)).collect();
                                 if !lost.is_empty() && !names.is_empty() {
                                     pending.push(Pending {
                                         output: to_column.clone(),
@@ -2877,7 +2755,9 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     // let `columns_named_in` decide which words in it are columns the relation
     // really has.
     let mut seen_indirect: HashSet<(String, String, crate::role::Role)> = HashSet::new();
-    let note = |rel: &str, text: &str, role: crate::role::Role,
+    let note = |rel: &str,
+                text: &str,
+                role: crate::role::Role,
                 known: &HashMap<String, HashSet<String>>,
                 out: &mut Vec<IndirectRead>,
                 seen: &mut HashSet<(String, String, crate::role::Role)>| {
@@ -2912,34 +2792,26 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     // binds, or to the one source having it, followed through CTEs back to a
     // relation whose list has the column. `None` when several sources have it
     // or a qualifier binds none, which the caller counts.
-    let place = |sources: &[(String, Option<String>)],
-                 qualifier: &Option<String>,
-                 name: &String|
-     -> Option<Vec<(String, String)>> {
+    let place = |sources: &[(String, Option<String>)], qualifier: &Option<String>, name: &String| -> Option<Vec<(String, String)>> {
         let bound: Vec<&(String, Option<String>)> = sources
             .iter()
             .filter(|(source, alias)| match qualifier {
-                Some(qn) => {
-                    alias.as_ref() == Some(qn)
-                        || (alias.is_none() && source.rsplit('.').next() == Some(qn.as_str()))
-                }
+                Some(qn) => alias.as_ref() == Some(qn) || (alias.is_none() && source.rsplit('.').next() == Some(qn.as_str())),
                 None => true,
             })
             .collect();
         let mut owners: Vec<Vec<(String, String)>> = Vec::new();
         for (source, _) in &bound {
             let found: Vec<(String, String)> = match ctes.get(source.as_str()) {
-                Some(ids) if !source.contains('.') => ids
-                    .iter()
-                    .flat_map(|id| scope_column_sources(&by_id, &owner, &owned, &feeds, id, name))
-                    .collect(),
+                Some(ids) if !source.contains('.') => {
+                    ids.iter().flat_map(|id| scope_column_sources(&by_id, &owner, &owned, &feeds, id, name)).collect()
+                }
                 _ => {
                     let rel = norm_relation(source);
                     vec![(rel, name.clone())]
                 }
             };
-            let found: Vec<(String, String)> =
-                found.into_iter().filter(|(r, c)| known.get(r).is_some_and(|k| k.contains(c))).collect();
+            let found: Vec<(String, String)> = found.into_iter().filter(|(r, c)| known.get(r).is_some_and(|k| k.contains(c))).collect();
             if !found.is_empty() {
                 owners.push(found);
             }
@@ -3011,9 +2883,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     // subquery in an expression: the correlation of `r.book_id = b.book_id`
     // is a read of `b` (0049). A bare name is never looked for outward.
     let binds_in = |sources: &[(String, Option<String>)], qn: &str| {
-        sources.iter().any(|(source, alias)| {
-            alias.as_deref() == Some(qn) || (alias.is_none() && source.rsplit('.').next() == Some(qn))
-        })
+        sources.iter().any(|(source, alias)| alias.as_deref() == Some(qn) || (alias.is_none() && source.rsplit('.').next() == Some(qn)))
     };
     for p in &predicates {
         // A subquery follows the predicate that holds it and reads for it.
@@ -3067,9 +2937,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
         rule.columns.retain(|c| once.insert(c.clone()));
         out.rules.push(rule);
     }
-    out.indirect.sort_by(|a, b| {
-        (&a.relation, &a.column, a.role.as_str()).cmp(&(&b.relation, &b.column, b.role.as_str()))
-    });
+    out.indirect.sort_by(|a, b| (&a.relation, &a.column, a.role.as_str()).cmp(&(&b.relation, &b.column, b.role.as_str())));
 
     // A column with no edge is a root when the SQL builds it from literals, and a
     // loss otherwise. Telling them apart matters both ways. `cast(null as text)
@@ -3089,9 +2957,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     // and the column an unknown one names are in, so that a name the engine
     // could not place is never taken for no name at all.
     let mut vocabulary: HashSet<String> = anywhere.clone();
-    vocabulary.extend(
-        res.nodes.iter().filter(|n| n.node_type == NodeType::Column).map(|n| n.label.to_lowercase()),
-    );
+    vocabulary.extend(res.nodes.iter().filter(|n| n.node_type == NodeType::Column).map(|n| n.label.to_lowercase()));
     for i in out.issues.iter().filter(|i| i.code == issue_codes::UNKNOWN_COLUMN) {
         // "Column 'x' not found in table ...", and the message is all it gives.
         if let Some(name) = i.message.split('\'').nth(1) {
@@ -3101,9 +2967,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     for i in out.issues.iter().filter(|i| i.code == issue_codes::UNRESOLVED_REFERENCE) {
         if let Some(text) = i.span.and_then(|(a, b)| sql.get(a..b)) {
             vocabulary.extend(
-                text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
-                    .filter(|w| !w.is_empty())
-                    .map(str::to_lowercase),
+                text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty()).map(str::to_lowercase),
             );
         }
     }
@@ -3123,10 +2987,8 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
                 // lost has reached that name no more than any other.
                 let own = nodes_of.get(p.output.as_str());
                 reached.get(&p.output).is_some_and(|ids| {
-                    ids.iter().any(|id| {
-                        !own.is_some_and(|o| o.contains(id))
-                            && by_id.get(id).is_some_and(|n| n.label.eq_ignore_ascii_case(name))
-                    })
+                    ids.iter()
+                        .any(|id| !own.is_some_and(|o| o.contains(id)) && by_id.get(id).is_some_and(|n| n.label.eq_ignore_ascii_case(name)))
                 }) || edge_columns.get(p.output.as_str()).is_some_and(|c| c.contains(name.as_str()))
             };
             let names = p.names.iter().filter(|n| !(p.weigh && got_elsewhere(n)));
@@ -3186,10 +3048,7 @@ pub fn resolve(sql: &str, adapter: &str, visible: &[Visible]) -> Resolved {
     out.roots.sort_by(|a, b| a.column.cmp(&b.column));
     out.lost.sort_by(|a, b| a.column.cmp(&b.column));
     out.unbacked.sort_by(|a, b| (&a.output, &a.cte, &a.column).cmp(&(&b.output, &b.cte, &b.column)));
-    out.edges.sort_by(|a, b| {
-        (&a.to_column, &a.from_relation, &a.from_column)
-            .cmp(&(&b.to_column, &b.from_relation, &b.from_column))
-    });
+    out.edges.sort_by(|a, b| (&a.to_column, &a.from_relation, &a.from_column).cmp(&(&b.to_column, &b.from_relation, &b.from_column)));
     out
 }
 
@@ -3202,19 +3061,12 @@ mod tests {
     }
 
     fn vis(rel: &str, cols: &[&str]) -> Visible {
-        Visible {
-            relation: rel.to_string(),
-            columns: cols.iter().map(|s| s.to_string()).collect(),
-        }
+        Visible { relation: rel.to_string(), columns: cols.iter().map(|s| s.to_string()).collect() }
     }
 
     #[test]
     fn a_star_expands_from_the_supplied_schema() {
-        let r = resolve(
-            "select * from db.sch.orders",
-            "snowflake",
-            &[vis("DB.SCH.ORDERS", &["id", "amount"])],
-        );
+        let r = resolve("select * from db.sch.orders", "snowflake", &[vis("DB.SCH.ORDERS", &["id", "amount"])]);
         assert_eq!(r.outputs, vec!["amount", "id"]);
         assert_eq!(r.edges.len(), 2);
         assert!(r.edges.iter().all(|e| e.from_relation == "DB.SCH.ORDERS"));
@@ -3263,11 +3115,7 @@ mod tests {
 
     #[test]
     fn an_expression_is_carried_out_to_the_edge() {
-        let r = resolve(
-            "select amount * 1.2 as gross from db.sch.orders",
-            "snowflake",
-            &[vis("DB.SCH.ORDERS", &["id", "amount"])],
-        );
+        let r = resolve("select amount * 1.2 as gross from db.sch.orders", "snowflake", &[vis("DB.SCH.ORDERS", &["id", "amount"])]);
         let e = r.edges.iter().find(|e| e.to_column == "gross").expect("gross");
         assert_eq!(e.from_column, "amount");
         assert!(!e.expression.is_empty(), "a computed column must carry its expression");
@@ -3308,11 +3156,7 @@ mod tests {
 
     #[test]
     fn an_alias_that_merely_uses_a_function_is_kept() {
-        let r = resolve(
-            "select coalesce(a, b) as amount from db.sch.orders",
-            "snowflake",
-            &[vis("DB.SCH.ORDERS", &["a", "b"])],
-        );
+        let r = resolve("select coalesce(a, b) as amount from db.sch.orders", "snowflake", &[vis("DB.SCH.ORDERS", &["a", "b"])]);
         assert_eq!(r.outputs, vec!["amount"]);
         assert!(r.edges.iter().any(|e| e.to_column == "amount"));
     }
@@ -3336,17 +3180,15 @@ mod tests {
         );
         assert_eq!(r.outputs, vec!["amount", "id"]);
         assert_eq!(r.edges.len(), 2);
-        assert!(r.edges.iter().all(|e| e.from_relation == "DB.DBO.SHOP_ADDRESS"),
-            "attribution still normalises, so the dbt node is still found");
+        assert!(
+            r.edges.iter().all(|e| e.from_relation == "DB.DBO.SHOP_ADDRESS"),
+            "attribution still normalises, so the dbt node is still found"
+        );
     }
 
     #[test]
     fn an_unquoted_relation_still_matches_after_the_engine_folds_its_case() {
-        let r = resolve(
-            "select * from db.sch.orders",
-            "snowflake",
-            &[vis("db.sch.orders", &["id", "amount"])],
-        );
+        let r = resolve("select * from db.sch.orders", "snowflake", &[vis("db.sch.orders", &["id", "amount"])]);
         assert_eq!(r.outputs, vec!["amount", "id"]);
     }
 
@@ -3426,8 +3268,7 @@ mod tests {
             template_config: None,
         });
         let r = resolve(sql, "snowflake", &[Visible { relation: "db.sch.src".into(), columns }]);
-        let theirs: Vec<_> =
-            engine.issues.iter().map(|i| (&*i.code, i.span.map(|s| (s.start, s.end)))).collect();
+        let theirs: Vec<_> = engine.issues.iter().map(|i| (&*i.code, i.span.map(|s| (s.start, s.end)))).collect();
         let ours: Vec<_> = r.issues.iter().map(|i| (&*i.code, i.span)).collect();
         assert!(ours.iter().filter(|(_, s)| s.is_some()).count() > 1, "{ours:?}");
         assert_eq!(ours, theirs);
@@ -3452,11 +3293,8 @@ mod tests {
         // itself, and it is never among its own parents.
         let sql = "select id, ts from db.sch.src where ts > (select max(ts) from db.sch.m)";
         let r = resolve(sql, "snowflake", &[vis("db.sch.src", &["id", "ts"])]);
-        let named: Vec<(&str, &str, bool)> = r
-            .issues
-            .iter()
-            .filter_map(|i| i.relation.as_deref().map(|rel| (i.code.as_str(), rel, i.degrading)))
-            .collect();
+        let named: Vec<(&str, &str, bool)> =
+            r.issues.iter().filter_map(|i| i.relation.as_deref().map(|rel| (i.code.as_str(), rel, i.degrading))).collect();
         assert_eq!(named, vec![("UNRESOLVED_REFERENCE", "DB.SCH.M", true)]);
         assert!(r.approximate, "what the engine admits is unchanged");
         // The span fallback rests on this: it spells the table as the SQL does.
@@ -3499,11 +3337,7 @@ mod tests {
             &[vis("DB.SCH.PARENT", &["a", "b"])],
         );
         assert_eq!(r.reads, vec!["DB.SCH.PARENT"]);
-        let r = resolve(
-            "select seq4() as n from table(generator(rowcount => 10))",
-            "snowflake",
-            &[],
-        );
+        let r = resolve("select seq4() as n from table(generator(rowcount => 10))", "snowflake", &[]);
         assert!(r.reads.is_empty(), "{:?}", r.reads);
     }
 
@@ -3526,11 +3360,8 @@ mod tests {
         // dbt packages ship models shaped exactly like this to declare a schema.
         // They have no parent to find, so counting them as uncovered understates
         // coverage and sends a reader looking for something that cannot exist.
-        let r = resolve(
-            "select id, cast(null as varchar) as note from db.sch.orders",
-            "snowflake",
-            &[vis("DB.SCH.ORDERS", &["id", "amount"])],
-        );
+        let r =
+            resolve("select id, cast(null as varchar) as note from db.sch.orders", "snowflake", &[vis("DB.SCH.ORDERS", &["id", "amount"])]);
         assert_eq!(root_columns(&r), vec!["note"]);
         assert!(r.edges.iter().all(|e| e.to_column != "note"));
     }
@@ -3568,8 +3399,7 @@ mod tests {
         );
         assert_eq!(root_columns(&r), vec!["loaded_at", "origin"]);
         assert!(r.lost.is_empty(), "a root is never also lost");
-        let edges: Vec<(&str, &str)> =
-            r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
+        let edges: Vec<(&str, &str)> = r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
         assert_eq!(edges, vec![("id", "id")]);
     }
 
@@ -3595,10 +3425,7 @@ mod tests {
             "snowflake",
             &[vis("DB.SCH.SRC", &["id", "code"])],
         );
-        assert_eq!(
-            root_values(&r),
-            vec![("booked_at", Some(vec!["current_timestamp()"])), ("origin", Some(vec!["'LEDGER'"]))]
-        );
+        assert_eq!(root_values(&r), vec![("booked_at", Some(vec!["current_timestamp()"])), ("origin", Some(vec!["'LEDGER'"]))]);
     }
 
     #[test]
@@ -3679,10 +3506,7 @@ mod tests {
                 "with u as ((with w as (select 1 as one) select 'a' as x from db.sch.a \
                  union all select 'b' from db.sch.b, db.sch.a union all select 'c')) select x from u",
             ),
-            (
-                "snowflake",
-                "(with w as (select 1 as one) select 'a' as x from db.sch.a, db.sch.b union all select 'c')",
-            ),
+            ("snowflake", "(with w as (select 1 as one) select 'a' as x from db.sch.a, db.sch.b union all select 'c')"),
         ] {
             let r = resolve(sql, dialect, &tables);
             if r.roots.is_empty() || r.roots.iter().any(|root| root.complete) {
@@ -3763,11 +3587,7 @@ mod tests {
     #[test]
     fn a_literal_only_cte_with_missing_names_stays_a_gap() {
         // `a` and `b` are names the CTE never had, whatever it was built from.
-        let r = resolve(
-            "with lit as (select 1 as dummy), picked as (select a, b from lit) select * from picked",
-            "snowflake",
-            &[],
-        );
+        let r = resolve("with lit as (select 1 as dummy), picked as (select a, b from lit) select * from picked", "snowflake", &[]);
         assert!(r.roots.is_empty(), "{:?}", r.roots);
     }
 
@@ -3782,20 +3602,14 @@ mod tests {
             "snowflake",
             &[vis("DB.SCH.SHOP_ORDERS", &["order_id", "amount"])],
         );
-        let edges: Vec<(&str, &str)> =
-            r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
+        let edges: Vec<(&str, &str)> = r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
         assert_eq!(edges, vec![("order_id", "order_id")]);
         assert!(r.roots.is_empty(), "{:?}", r.roots);
         assert_eq!(r.lost.len(), 1);
         assert_eq!(r.lost[0].column, "coupon");
         assert_eq!(
             r.lost[0].ends,
-            vec![DeadEnd::Phantom {
-                via: "o".into(),
-                column: "coupon_code".into(),
-                reads: vec!["DB.SCH.SHOP_ORDERS".into()],
-                star: true,
-            }]
+            vec![DeadEnd::Phantom { via: "o".into(), column: "coupon_code".into(), reads: vec!["DB.SCH.SHOP_ORDERS".into()], star: true }]
         );
     }
 
@@ -3820,8 +3634,7 @@ mod tests {
     }
 
     fn read_from(r: &Resolved) -> Vec<(&str, &str)> {
-        let mut out: Vec<(&str, &str)> =
-            r.edges.iter().map(|e| (e.from_relation.as_str(), e.from_column.as_str())).collect();
+        let mut out: Vec<(&str, &str)> = r.edges.iter().map(|e| (e.from_relation.as_str(), e.from_column.as_str())).collect();
         out.sort();
         out.dedup();
         out
@@ -3853,12 +3666,8 @@ mod tests {
     }
 
     fn read_into<'a>(r: &'a Resolved, column: &str) -> Vec<(&'a str, &'a str)> {
-        let mut out: Vec<(&str, &str)> = r
-            .edges
-            .iter()
-            .filter(|e| e.to_column == column)
-            .map(|e| (e.from_relation.as_str(), e.from_column.as_str()))
-            .collect();
+        let mut out: Vec<(&str, &str)> =
+            r.edges.iter().filter(|e| e.to_column == column).map(|e| (e.from_relation.as_str(), e.from_column.as_str())).collect();
         out.sort();
         out.dedup();
         out
@@ -3876,10 +3685,7 @@ mod tests {
             "snowflake",
             &[vis("DB.S.RUNS", &["k", "flag", "ts"]), vis("DB.S.MODELS", &["k", "name"])],
         );
-        assert_eq!(
-            read_into(&r, "last_k"),
-            vec![("DB.S.MODELS", "k"), ("DB.S.RUNS", "flag"), ("DB.S.RUNS", "k"), ("DB.S.RUNS", "ts")]
-        );
+        assert_eq!(read_into(&r, "last_k"), vec![("DB.S.MODELS", "k"), ("DB.S.RUNS", "flag"), ("DB.S.RUNS", "k"), ("DB.S.RUNS", "ts")]);
         let r = resolve(
             "select e.k, row_number() over (partition by m.k order by e.ts) as rn \
              from db.s.runs e join db.s.models m on e.k = m.k",
@@ -3934,10 +3740,7 @@ mod tests {
             "snowflake",
             &[vis("DB.S.A", &["g", "ts"]), vis("DB.S.B", &["g", "ts"])],
         );
-        assert_eq!(
-            read_into(&r, "rn"),
-            vec![("DB.S.A", "g"), ("DB.S.A", "ts"), ("DB.S.B", "g"), ("DB.S.B", "ts")]
-        );
+        assert_eq!(read_into(&r, "rn"), vec![("DB.S.A", "g"), ("DB.S.A", "ts"), ("DB.S.B", "g"), ("DB.S.B", "ts")]);
     }
 
     #[test]
@@ -3965,16 +3768,12 @@ mod tests {
         // roles to weigh. (Both straight off `y`, the engine keeps one of the
         // two edges between the same columns, and no walk can help.)
         let y = "with y as (select a + 1 as e from db.s.t), y2 as (select e from y) ";
-        for body in [
-            "select max(e) over () as e from y union all select e from y2",
-            "select e from y2 union all select max(e) over () as e from y",
-        ] {
+        for body in
+            ["select max(e) over () as e from y union all select e from y2", "select e from y2 union all select max(e) over () as e from y"]
+        {
             let r = resolve(&format!("{y}{body}"), "snowflake", &[vis("DB.S.T", &["a", "b"])]);
-            let roles: Vec<crate::role::Role> = r
-                .edges
-                .iter()
-                .map(|e| crate::role::classify(&e.expression, &e.from_column, &e.to_column))
-                .collect();
+            let roles: Vec<crate::role::Role> =
+                r.edges.iter().map(|e| crate::role::classify(&e.expression, &e.from_column, &e.to_column)).collect();
             assert_eq!(roles, vec![crate::role::Role::Window], "{body}");
         }
     }
@@ -3990,8 +3789,7 @@ mod tests {
             "snowflake",
             &[vis("DB.SCH.SRC", &["id", "code", "amount"])],
         );
-        let edges: Vec<(&str, &str)> =
-            r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
+        let edges: Vec<(&str, &str)> = r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
         assert_eq!(edges, vec![("code", "code")]);
         assert!(r.lost.is_empty());
     }
@@ -4010,10 +3808,7 @@ mod tests {
     fn a_subquery_s_table_is_not_a_name_read() {
         let v = HashSet::from(["v".to_string()]);
         let tables = HashSet::from(["orders".to_string()]);
-        assert_eq!(
-            read_names("coalesce((select max(v) from db.sch.orders), o.amount)", &v, &tables),
-            vec!["v", "amount"]
-        );
+        assert_eq!(read_names("coalesce((select max(v) from db.sch.orders), o.amount)", &v, &tables), vec!["v", "amount"]);
     }
 
     fn spans(first: &str, second: &str) -> String {
@@ -4038,12 +3833,8 @@ mod tests {
     }
 
     fn seen_at_sources(r: &Resolved) -> Vec<(&str, &str)> {
-        let mut out: Vec<(&str, &str)> = r
-            .edges
-            .iter()
-            .filter(|e| e.from_column == "seen_at")
-            .map(|e| (e.from_relation.as_str(), e.to_column.as_str()))
-            .collect();
+        let mut out: Vec<(&str, &str)> =
+            r.edges.iter().filter(|e| e.from_column == "seen_at").map(|e| (e.from_relation.as_str(), e.to_column.as_str())).collect();
         out.sort();
         out
     }
@@ -4061,10 +3852,7 @@ mod tests {
         // occurrence (0028), so the plan need not set such a compile aside
         // (0018). Should a pin undo that, this fails first.
         let r = resolve(&spans("t", "t"), "snowflake", &span_tables());
-        assert_eq!(
-            seen_at_sources(&r),
-            vec![("DB.S.INVOICES", "open_seen_at"), ("DB.S.PAYMENTS", "paid_seen_at")]
-        );
+        assert_eq!(seen_at_sources(&r), vec![("DB.S.INVOICES", "open_seen_at"), ("DB.S.PAYMENTS", "paid_seen_at")]);
     }
 
     #[test]
@@ -4113,10 +3901,7 @@ mod tests {
             "snowflake",
             &span_tables(),
         );
-        assert_eq!(
-            seen_at_sources(&r),
-            vec![("DB.S.INVOICES", "open_seen_at"), ("DB.S.PAYMENTS", "paid_seen_at")]
-        );
+        assert_eq!(seen_at_sources(&r), vec![("DB.S.INVOICES", "open_seen_at"), ("DB.S.PAYMENTS", "paid_seen_at")]);
     }
 
     #[test]
@@ -4164,8 +3949,7 @@ mod tests {
             "snowflake",
             &[vis("DB.S.HX", &["id", "data"])],
         );
-        let mut edges: Vec<(&str, &str)> =
-            r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
+        let mut edges: Vec<(&str, &str)> = r.edges.iter().map(|e| (e.from_column.as_str(), e.to_column.as_str())).collect();
         edges.sort();
         assert_eq!(edges, vec![("data", "element_name"), ("data", "element_value")]);
         assert_eq!(root_columns(&r), vec!["position"]);
@@ -4207,10 +3991,9 @@ mod tests {
         // column from it anyway. Inside TRIM the engine sees no name at all;
         // without it, it makes one up for the CTE. Either way the SQL cannot
         // run, and the column is not the relation's by any SQL that does.
-        for hash in [
-            "sha1_binary(concat_ws('||', upper(trim(cast(b as varchar)))))",
-            "sha1_binary(concat_ws('||', upper(cast(b as varchar))))",
-        ] {
+        for hash in
+            ["sha1_binary(concat_ws('||', upper(trim(cast(b as varchar)))))", "sha1_binary(concat_ws('||', upper(cast(b as varchar))))"]
+        {
             let r = resolve(
                 &format!(
                     "with d as (select a, 'x' as rs from db.s.p), \
@@ -4245,11 +4028,7 @@ mod tests {
         // that renamed `a` to `b` gives `a`, where mining the table gave both.
         let hash = "sha1_binary(upper(trim(cast(b as varchar))))";
         for (cte, want) in [("select a, b from db.s.p", "b"), ("select a as b from db.s.p", "a")] {
-            let r = resolve(
-                &format!("with d as ({cte}), h as (select {hash} as hk from d) select * from h"),
-                "snowflake",
-                &p_table(),
-            );
+            let r = resolve(&format!("with d as ({cte}), h as (select {hash} as hk from d) select * from h"), "snowflake", &p_table());
             assert!(r.unbacked.is_empty(), "{cte}");
             let from: Vec<&str> = r.edges.iter().map(|e| e.from_column.as_str()).collect();
             assert_eq!(from, vec![want], "{cte}");
@@ -4268,32 +4047,18 @@ mod tests {
         assert!(lateral.unbacked.is_empty(), "{:?}", unbacked_of(&lateral));
         // Over a relation, the star is whatever list the relation came with:
         // a missing name says that list is short, not that the SQL cannot run.
-        let short = resolve(
-            "with d as (select * from db.s.p) select d.a, d.z from d",
-            "snowflake",
-            &p_table(),
-        );
+        let short = resolve("with d as (select * from db.s.p) select d.a, d.z from d", "snowflake", &p_table());
         assert!(short.unbacked.is_empty(), "{:?}", unbacked_of(&short));
         // Over another CTE written out, it is not.
-        let spelled = resolve(
-            "with u as (select 'x' as src from db.s.p), f as (select * from u) select f.k from f",
-            "snowflake",
-            &p_table(),
-        );
+        let spelled =
+            resolve("with u as (select 'x' as src from db.s.p), f as (select * from u) select f.k from f", "snowflake", &p_table());
         assert_eq!(unbacked_of(&spelled), vec![("k", "f", "k", vec![])]);
     }
 
     #[test]
     fn a_column_the_list_lacks_is_read_as_the_list_s_finding() {
-        let r = resolve(
-            "select s.id, s.amount from db.sch.stage as s",
-            "snowflake",
-            &[vis("DB.SCH.STAGE", &["id"])],
-        );
-        assert_eq!(
-            r.unknown_columns,
-            vec![UnknownColumn { relation: "DB.SCH.STAGE".into(), column: "amount".into() }]
-        );
+        let r = resolve("select s.id, s.amount from db.sch.stage as s", "snowflake", &[vis("DB.SCH.STAGE", &["id"])]);
+        assert_eq!(r.unknown_columns, vec![UnknownColumn { relation: "DB.SCH.STAGE".into(), column: "amount".into() }]);
         assert!(!r.approximate, "the engine read the name and drew the edge");
         assert!(r.edges.iter().any(|e| e.from_column == "amount"));
         // A message that reads otherwise can match no edge.
@@ -4320,11 +4085,7 @@ mod tests {
         let mut from: Vec<&str> = r.edges.iter().map(|e| e.from_column.as_str()).collect();
         from.sort();
         assert_eq!(from, vec!["amount", "id"]);
-        assert!(r.edges.iter().all(|e| crate::role::classify(
-            &e.expression,
-            &e.from_column,
-            &e.to_column
-        ) == crate::role::Role::Window));
+        assert!(r.edges.iter().all(|e| crate::role::classify(&e.expression, &e.from_column, &e.to_column) == crate::role::Role::Window));
     }
 
     #[test]
@@ -4360,16 +4121,11 @@ mod tests {
             &[vis("DB.SCH.ORDERS", &["id", "amount"])],
         );
         assert!(r.outputs.contains(&"rn".to_string()), "{:?}", r.outputs);
-        let mut from: Vec<&str> =
-            r.edges.iter().filter(|e| e.to_column == "rn").map(|e| e.from_column.as_str()).collect();
+        let mut from: Vec<&str> = r.edges.iter().filter(|e| e.to_column == "rn").map(|e| e.from_column.as_str()).collect();
         from.sort();
         from.dedup();
         assert_eq!(from, vec!["amount", "id"], "the window reads both, through two CTEs");
-        assert!(r
-            .edges
-            .iter()
-            .filter(|e| e.to_column == "rn")
-            .all(|e| e.from_relation == "DB.SCH.ORDERS"));
+        assert!(r.edges.iter().filter(|e| e.to_column == "rn").all(|e| e.from_relation == "DB.SCH.ORDERS"));
     }
 
     #[test]
@@ -4396,14 +4152,10 @@ mod tests {
         assert!(over_clauses("'over (partition by a)'").is_empty());
         assert!(over_clauses("handover(x)").is_empty());
         // Windows are written across lines, and this corpus is CRLF throughout.
-        assert_eq!(over_clauses("row_number() over\r\n  (\r\n partition by a\r\n)"),
-            vec!["\r\n partition by a\r\n"]);
+        assert_eq!(over_clauses("row_number() over\r\n  (\r\n partition by a\r\n)"), vec!["\r\n partition by a\r\n"]);
         // A comment can hold anything at all, and an index taken from a
         // lowercased copy used to land inside one of these and panic.
-        assert_eq!(
-            over_clauses("-- a \u{2192} b\nrow_number() over (order by \u{e9}t\u{e9})"),
-            vec!["order by \u{e9}t\u{e9}"]
-        );
+        assert_eq!(over_clauses("-- a \u{2192} b\nrow_number() over (order by \u{e9}t\u{e9})"), vec!["order by \u{e9}t\u{e9}"]);
     }
 
     #[test]
@@ -4417,12 +4169,7 @@ mod tests {
             "snowflake",
             &[vis("DB.SCH.ORDERS", &["id", "amount", "cid", "ts"])],
         );
-        let keys: Vec<&str> = r
-            .indirect
-            .iter()
-            .filter(|i| i.role == crate::role::Role::DedupKey)
-            .map(|i| i.column.as_str())
-            .collect();
+        let keys: Vec<&str> = r.indirect.iter().filter(|i| i.role == crate::role::Role::DedupKey).map(|i| i.column.as_str()).collect();
         assert_eq!(keys, vec!["cid", "ts"]);
         assert!(r.indirect.iter().all(|i| i.relation == "DB.SCH.ORDERS"));
         // And it stays out of the projection, which is the whole distinction.
@@ -4440,12 +4187,8 @@ mod tests {
     }
 
     fn dedup_keys(r: &Resolved) -> Vec<(&str, &str)> {
-        let mut out: Vec<(&str, &str)> = r
-            .indirect
-            .iter()
-            .filter(|i| i.role == crate::role::Role::DedupKey)
-            .map(|i| (i.relation.as_str(), i.column.as_str()))
-            .collect();
+        let mut out: Vec<(&str, &str)> =
+            r.indirect.iter().filter(|i| i.role == crate::role::Role::DedupKey).map(|i| (i.relation.as_str(), i.column.as_str())).collect();
         out.sort();
         out
     }
@@ -4488,12 +4231,7 @@ mod tests {
         );
         assert_eq!(
             dedup_keys(&r),
-            vec![
-                ("DB.SCH.ORDERS", "cid"),
-                ("DB.SCH.ORDERS", "ts"),
-                ("DB.SCH.ORDERS_ARCHIVE", "cid"),
-                ("DB.SCH.ORDERS_ARCHIVE", "ts"),
-            ]
+            vec![("DB.SCH.ORDERS", "cid"), ("DB.SCH.ORDERS", "ts"), ("DB.SCH.ORDERS_ARCHIVE", "cid"), ("DB.SCH.ORDERS_ARCHIVE", "ts"),]
         );
     }
 
@@ -4560,12 +4298,8 @@ mod tests {
     }
 
     fn join_keys(r: &Resolved) -> Vec<(&str, &str)> {
-        let mut out: Vec<(&str, &str)> = r
-            .indirect
-            .iter()
-            .filter(|i| i.role == crate::role::Role::JoinKey)
-            .map(|i| (i.relation.as_str(), i.column.as_str()))
-            .collect();
+        let mut out: Vec<(&str, &str)> =
+            r.indirect.iter().filter(|i| i.role == crate::role::Role::JoinKey).map(|i| (i.relation.as_str(), i.column.as_str())).collect();
         out.sort();
         out
     }
@@ -4609,28 +4343,17 @@ mod tests {
 
     #[test]
     fn a_using_column_is_a_key_on_both_sides() {
-        let r = resolve(
-            "select o.id, c.region from db.sch.orders o join db.sch.customers c using (cid)",
-            "snowflake",
-            &dedup_tables(),
-        );
+        let r = resolve("select o.id, c.region from db.sch.orders o join db.sch.customers c using (cid)", "snowflake", &dedup_tables());
         assert_eq!(join_keys(&r), vec![("DB.SCH.CUSTOMERS", "cid"), ("DB.SCH.ORDERS", "cid")]);
     }
 
     fn filter_tables() -> Vec<Visible> {
-        vec![
-            vis("DB.SCH.ORDERS", &["id", "amount", "cid", "ts", "status"]),
-            vis("DB.SCH.MARK", &["ts"]),
-        ]
+        vec![vis("DB.SCH.ORDERS", &["id", "amount", "cid", "ts", "status"]), vis("DB.SCH.MARK", &["ts"])]
     }
 
     fn reads_of(r: &Resolved, role: crate::role::Role) -> Vec<(&str, &str)> {
-        let mut out: Vec<(&str, &str)> = r
-            .indirect
-            .iter()
-            .filter(|i| i.role == role)
-            .map(|i| (i.relation.as_str(), i.column.as_str()))
-            .collect();
+        let mut out: Vec<(&str, &str)> =
+            r.indirect.iter().filter(|i| i.role == role).map(|i| (i.relation.as_str(), i.column.as_str())).collect();
         out.sort();
         out
     }
@@ -4648,23 +4371,13 @@ mod tests {
 
     #[test]
     fn a_subquery_a_filter_compares_with_is_read_as_a_filter() {
-        let r = resolve(
-            "select id from db.sch.orders where ts = (select max(ts) from db.sch.mark)",
-            "snowflake",
-            &filter_tables(),
-        );
-        assert_eq!(
-            reads_of(&r, crate::role::Role::Filter),
-            vec![("DB.SCH.MARK", "ts"), ("DB.SCH.ORDERS", "ts")]
-        );
+        let r = resolve("select id from db.sch.orders where ts = (select max(ts) from db.sch.mark)", "snowflake", &filter_tables());
+        assert_eq!(reads_of(&r, crate::role::Role::Filter), vec![("DB.SCH.MARK", "ts"), ("DB.SCH.ORDERS", "ts")]);
         assert_eq!(r.outputs, vec!["id"], "the subquery is no output column");
     }
 
     fn shelf_tables() -> Vec<Visible> {
-        vec![
-            vis("LAB.SHELF.BOOKS", &["book_id", "title"]),
-            vis("LAB.RAW.REVIEWS", &["book_id", "stars"]),
-        ]
+        vec![vis("LAB.SHELF.BOOKS", &["book_id", "title"]), vis("LAB.RAW.REVIEWS", &["book_id", "stars"])]
     }
 
     #[test]
@@ -4677,10 +4390,7 @@ mod tests {
             "snowflake",
             &shelf_tables(),
         );
-        assert_eq!(
-            reads_of(&r, crate::role::Role::Filter),
-            vec![("LAB.RAW.REVIEWS", "book_id"), ("LAB.SHELF.BOOKS", "book_id")]
-        );
+        assert_eq!(reads_of(&r, crate::role::Role::Filter), vec![("LAB.RAW.REVIEWS", "book_id"), ("LAB.SHELF.BOOKS", "book_id")]);
         assert_eq!(r.unplaced_filter, 0);
     }
 
@@ -4694,11 +4404,7 @@ mod tests {
         );
         assert_eq!(
             reads_of(&r, crate::role::Role::Filter),
-            vec![
-                ("LAB.RAW.REVIEWS", "book_id"),
-                ("LAB.RAW.REVIEWS", "stars"),
-                ("LAB.SHELF.BOOKS", "book_id")
-            ]
+            vec![("LAB.RAW.REVIEWS", "book_id"), ("LAB.RAW.REVIEWS", "stars"), ("LAB.SHELF.BOOKS", "book_id")]
         );
     }
 
@@ -4823,17 +4529,11 @@ mod tests {
             &[vis("DB.SCH.ORDERS", &["id", "cid"]), vis("DB.SCH.CUSTOMERS", &["id", "region"])],
         );
         assert_eq!(r.outputs, vec!["id"], "customers feeds no output column");
-        let mut got: Vec<(&str, &str, &str)> = r
-            .indirect
-            .iter()
-            .map(|i| (i.relation.as_str(), i.column.as_str(), i.role.as_str()))
-            .collect();
+        let mut got: Vec<(&str, &str, &str)> =
+            r.indirect.iter().map(|i| (i.relation.as_str(), i.column.as_str(), i.role.as_str())).collect();
         got.sort();
         assert!(got.contains(&("DB.SCH.CUSTOMERS", "region", "filter")), "{got:?}");
-        assert!(
-            got.iter().any(|(r, c, k)| *r == "DB.SCH.CUSTOMERS" && *c == "id" && *k == "join_key"),
-            "{got:?}"
-        );
+        assert!(got.iter().any(|(r, c, k)| *r == "DB.SCH.CUSTOMERS" && *c == "id" && *k == "join_key"), "{got:?}");
     }
 
     #[test]
@@ -4848,27 +4548,20 @@ mod tests {
         );
         let e = r.edges.iter().find(|e| e.to_column == "gross").expect("gross");
         assert_eq!(e.from_column, "amount");
-        assert_eq!(
-            crate::role::classify(&e.expression, &e.from_column, &e.to_column),
-            crate::role::Role::Aggregate
-        );
+        assert_eq!(crate::role::classify(&e.expression, &e.from_column, &e.to_column), crate::role::Role::Aggregate);
     }
 
     #[test]
     fn a_recovered_name_must_be_a_column_the_relation_has() {
         let known = HashSet::from(["id".to_string(), "amount".to_string()]);
         // `total` is not a column of the relation, and `max` is a call.
-        assert_eq!(
-            columns_named_in("max(amount) over (partition by total)", &known),
-            vec!["amount"]
-        );
+        assert_eq!(columns_named_in("max(amount) over (partition by total)", &known), vec!["amount"]);
         // A qualifier is not the column it qualifies.
         assert_eq!(columns_named_in("o.amount", &known), vec!["amount"]);
         // A string literal names nothing, even when it spells a column.
         assert!(columns_named_in("'amount'", &known).is_empty());
         // A keyword is never taken for a column.
-        assert!(columns_named_in("case when x then y end", &HashSet::from(["end".to_string()]))
-            .is_empty());
+        assert!(columns_named_in("case when x then y end", &HashSet::from(["end".to_string()])).is_empty());
     }
 
     fn partial_of(r: &Resolved) -> Vec<(&str, &str, &str)> {
@@ -4948,11 +4641,7 @@ mod tests {
 
     #[test]
     fn a_name_its_cte_lacks_is_named_beside_the_unbacked_read() {
-        let r = resolve(
-            "with c as (select id from db.s.a) select c.id + c.nope as z from c",
-            "snowflake",
-            &[vis("DB.S.A", &["id", "x"])],
-        );
+        let r = resolve("with c as (select id from db.s.a) select c.id + c.nope as z from c", "snowflake", &[vis("DB.S.A", &["id", "x"])]);
         assert_eq!(r.edges.iter().map(|e| e.from_column.as_str()).collect::<Vec<_>>(), vec!["id"]);
         assert_eq!(unbacked_of(&r), vec![("z", "c", "nope", vec![])]);
         assert_eq!(partial_of(&r), vec![("z", "cte_lacks_name", "nope")]);
@@ -5034,13 +4723,7 @@ mod tests {
         let from = "from db.s.a a join db.s.b b on a.id = b.id";
         // The key is read in its own `SELECT` and the text is read against `a`:
         // `w` is `b`'s and is named, the words around it are not.
-        for key in [
-            "dateadd(day, 1, b.w)",
-            "datediff(day, b.w, b.id)",
-            "date_trunc(month, b.w)",
-            "b.w::date",
-            "b.w nulls last",
-        ] {
+        for key in ["dateadd(day, 1, b.w)", "datediff(day, b.w, b.id)", "date_trunc(month, b.w)", "b.w::date", "b.w nulls last"] {
             let r = resolve(
                 &format!("select a.x::date as date, a.x as last, row_number() over (partition by id order by {key}) as z {from}"),
                 "snowflake",
@@ -5161,11 +4844,7 @@ mod tests {
             let r = resolve(sql, "snowflake", &a_and_b());
             nothing_named(&r);
         }
-        let r = resolve(
-            "select array_size(filter(a.x, e -> e.v > 0)) as z from db.s.a a",
-            "snowflake",
-            &known,
-        );
+        let r = resolve("select array_size(filter(a.x, e -> e.v > 0)) as z from db.s.a a", "snowflake", &known);
         nothing_named(&r);
     }
 

@@ -27,7 +27,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
-          components: clippy
+          components: clippy, rustfmt
       # Merging a bump releases it (0035), so the install commands have to name
       # the version Cargo.toml is at before it lands.
       - name: The README installs this version
@@ -40,6 +40,9 @@ jobs:
             fi
           done
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Cheap first, and not on the Monday run for the reason Clippy is not (0055).
+      - run: cargo fmt --check
+        if: github.event_name != 'schedule'
       - run: cargo test --locked
       # Stable Clippy, every lint an error (0054). Not on the Monday run: that
       # one is for advisories, and a new stable Clippy must not turn it red
