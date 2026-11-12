@@ -1,6 +1,6 @@
 # collin
 
-[![VirusTotal](https://img.shields.io/endpoint?url=https%3A%2F%2Fgithub.com%2FIL-William%2Fdbt-collin%2Freleases%2Flatest%2Fdownload%2Fvirustotal.json)](https://github.com/IL-William/dbt-collin/releases/latest)
+[![VirusTotal](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fgithub.com%2FIL-William%2Fdbt-collin%2Freleases%2Flatest%2Fdownload%2Fvirustotal.json&query=%24.message&label=VirusTotal&color=blue)](https://github.com/IL-William/dbt-collin/releases/latest)
 
 Column-level lineage for a dbt project, derived from the compiled SQL dbt
 already writes. No warehouse connection, no credentials, no Jinja evaluation.
