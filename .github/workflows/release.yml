@@ -14,7 +14,8 @@ name: release
 # is the one it flagged there. A run by hand with the box ticked
 # publishes anyway. After an outage or an analysis that was slow, "Re-run
 # failed jobs" scans the same artifact again and uploads nothing VirusTotal
-# already has.
+# already has. The result goes into the release's notes, and a small
+# virustotal.json asset carries it to the badge in the README (0053).
 #
 # The tag is made here rather than pushed by hand: a tag pushed with this
 # workflow's token would start no workflow, and one pushed by hand is a step
@@ -156,7 +157,9 @@ jobs:
   # flag by any engine fails this job and so blocks the release, unless the run
   # was started by hand with the override ticked. A file VirusTotal already has
   # is not sent again, so "Re-run failed jobs" after an outage or an analysis
-  # that was slow looks at the same artifact and reads the same report.
+  # that was slow looks at the same artifact and reads the same report. The
+  # report is also written as the notes' table and the badge's JSON, uploaded
+  # as the artifact "virustotal" for the release job (0053).
   virustotal:
     needs: [version, build]
     if: needs.version.outputs.due == 'true'
@@ -289,12 +292,19 @@ jobs:
                 def hit: select(.category == "malicious" or .category == "suspicious");'
           flagged_any=false
           blocked=
+          # What the release job publishes: the table for the notes and the
+          # file shields.io reads for the README badge (0053). Both are written
+          # before a flag can end this step, so a run that publishes anyway
+          # carries them too.
+          out=$RUNNER_TEMP/vt-out
+          mkdir -p "$out"
+          worst_flagged=-1
+          worst_engines=0
+          table=$work/table.md
           {
-            echo "### VirusTotal"
-            echo
             echo "| File | SHA-256 | Flagged / engines | Report |"
             echo "| --- | --- | --- | --- |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } > "$table"
           : > "$work/details.md"
           for i in "${!files[@]}"; do
             file=${files[$i]}
@@ -302,7 +312,12 @@ jobs:
             report=$work/$i.json
             flagged=$(jq '(.data.attributes.last_analysis_stats.malicious // 0) + (.data.attributes.last_analysis_stats.suspicious // 0)' "$report")
             engines=$(jq '.data.attributes.last_analysis_results | length' "$report")
-            echo "| \`$file\` | \`$sha\` | $flagged / $engines | [report](https://www.virustotal.com/gui/file/$sha) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| \`$file\` | \`$sha\` | $flagged / $engines | [report](https://www.virustotal.com/gui/file/$sha) |" >> "$table"
+            # The badge shows the file with the most flags.
+            if [ "$flagged" -gt "$worst_flagged" ]; then
+              worst_flagged=$flagged
+              worst_engines=$engines
+            fi
             echo "$file: $flagged of $engines engines flag it"
             if [ "$flagged" -gt 0 ]; then
               flagged_any=true
@@ -316,9 +331,35 @@ jobs:
               blocked="${blocked:+$blocked; }$file ($names)"
             fi
           done
-          if [ -s "$work/details.md" ]; then
-            { echo; cat "$work/details.md"; } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "### VirusTotal"
+            echo
+            cat "$table"
+            if [ -s "$work/details.md" ]; then
+              echo
+              cat "$work/details.md"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### VirusTotal"
+            echo
+            echo "The Windows archive was checked on VirusTotal before this release was published."
+            echo
+            cat "$table"
+            if [ -s "$work/details.md" ]; then
+              echo
+              cat "$work/details.md"
+            fi
+          } > "$out/virustotal.md"
+          case "$worst_flagged" in
+            0) color=brightgreen ;;
+            1) color=yellow ;;
+            2) color=orange ;;
+            *) color=red ;;
+          esac
+          jq -n --arg message "$worst_flagged/$worst_engines · v$VERSION" --arg color "$color" \
+            '{schemaVersion: 1, label: "VirusTotal", message: $message, color: $color}' \
+            > "$out/virustotal.json"
 
           if [ "$flagged_any" = true ]; then
             if [ "$FORCE" = true ]; then
@@ -328,6 +369,14 @@ jobs:
             echo "::error::The release was not published: VirusTotal flagged $blocked. To publish anyway, run the release workflow by hand on main with \"Publish even if a VirusTotal engine flags the file\" ticked; it builds again and checks the new file."
             exit 1
           fi
+      # Default if: success(): a blocked run uploads nothing, a forced one does.
+      # The names cannot match what the release job attests or sums (collin-*).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: virustotal
+          path: ${{ runner.temp }}/vt-out/
+          if-no-files-found: error
+          retention-days: 7
 
   # Only this job can write, and only on main with a version still untagged.
   release:
@@ -355,9 +404,11 @@ jobs:
           cd dist
           sha256sum collin-* > SHA256SUMS
           # The tag is created with the release, at the commit that was built.
-          # The notes are GitHub's list of what was merged since the last
-          # release, not the message of whichever commit started this run: a
-          # retry or a fix to this file would otherwise describe itself.
-          gh release create "$TAG" collin-* SHA256SUMS \
+          # The notes are the VirusTotal table, then GitHub's list of what was
+          # merged since the last release, not the message of whichever commit
+          # started this run: a retry or a fix to this file would otherwise
+          # describe itself. virustotal.json is not attested: no one runs it,
+          # and the README badge reads it from the latest release (0053).
+          gh release create "$TAG" collin-* SHA256SUMS virustotal.json \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "collin $TAG" --generate-notes
+            --title "collin $TAG" --notes-file virustotal.md --generate-notes

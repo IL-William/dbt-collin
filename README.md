@@ -1,5 +1,7 @@
 # collin
 
+[![VirusTotal](https://img.shields.io/endpoint?url=https%3A%2F%2Fgithub.com%2FIL-William%2Fdbt-collin%2Freleases%2Flatest%2Fdownload%2Fvirustotal.json)](https://github.com/IL-William/dbt-collin/releases/latest)
+
 Column-level lineage for a dbt project, derived from the compiled SQL dbt
 already writes. No warehouse connection, no credentials, no Jinja evaluation.
 
@@ -34,9 +36,9 @@ Linux on x86_64 and one for Windows on x86_64, each with a build provenance
 GitHub attests:
 
 ```
-curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.0/collin-v0.12.0-aarch64-apple-darwin.tar.gz
-gh attestation verify collin-v0.12.0-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
-tar -xzf collin-v0.12.0-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.1/collin-v0.12.1-aarch64-apple-darwin.tar.gz
+gh attestation verify collin-v0.12.1-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
+tar -xzf collin-v0.12.1-aarch64-apple-darwin.tar.gz
 ```
 
 The binary is not notarized. Downloaded with `curl` it runs as is; downloaded
@@ -45,9 +47,9 @@ with a browser, macOS refuses it until `xattr -d com.apple.quarantine collin`.
 On Windows, from Git Bash:
 
 ```
-curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.0/collin-v0.12.0-x86_64-pc-windows-msvc.zip
-gh attestation verify collin-v0.12.0-x86_64-pc-windows-msvc.zip --repo IL-William/dbt-collin
-unzip collin-v0.12.0-x86_64-pc-windows-msvc.zip
+curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.1/collin-v0.12.1-x86_64-pc-windows-msvc.zip
+gh attestation verify collin-v0.12.1-x86_64-pc-windows-msvc.zip --repo IL-William/dbt-collin
+unzip collin-v0.12.1-x86_64-pc-windows-msvc.zip
 ```
 
 `collin.exe` is not signed. Downloaded with `curl` in Git Bash it runs as is;
@@ -60,7 +62,7 @@ compiler, which `cargo install` does.
 From source, with Rust 1.82 or later:
 
 ```
-cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.12.0 collin-cli
+cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.12.1 collin-cli
 ```
 
 `collin --version` says which collin it is, and the cache it writes names it
