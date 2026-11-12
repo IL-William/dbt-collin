@@ -1,6 +1,6 @@
 # 0053. A release shows its VirusTotal result
 
-Date: 2026-11-12 · Status: accepted · Amends 0052
+Date: 2026-11-12 · Status: accepted · Amends 0052 · amended by 0057
 
 **Trigger:** read before changing the VirusTotal table in a release's notes,
 the `virustotal.json` asset, or the README badge that reads it.
