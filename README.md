@@ -36,20 +36,35 @@ Linux on x86_64 and one for Windows on x86_64, each with a build provenance
 GitHub attests:
 
 ```
-curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.1/collin-v0.12.1-aarch64-apple-darwin.tar.gz
-gh attestation verify collin-v0.12.1-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
-tar -xzf collin-v0.12.1-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.2/collin-v0.12.2-aarch64-apple-darwin.tar.gz
+gh attestation verify collin-v0.12.2-aarch64-apple-darwin.tar.gz --repo IL-William/dbt-collin
+tar -xzf collin-v0.12.2-aarch64-apple-darwin.tar.gz
 ```
 
 The binary is not notarized. Downloaded with `curl` it runs as is; downloaded
 with a browser, macOS refuses it until `xattr -d com.apple.quarantine collin`.
 
-On Windows, from Git Bash:
+On Windows, from Git Bash, `collin.exe` alone needs no unzip, and its URL names
+no version, so it always gives the latest release:
 
 ```
-curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.1/collin-v0.12.1-x86_64-pc-windows-msvc.zip
-gh attestation verify collin-v0.12.1-x86_64-pc-windows-msvc.zip --repo IL-William/dbt-collin
-unzip collin-v0.12.1-x86_64-pc-windows-msvc.zip
+curl -L -o collin.exe https://github.com/IL-William/dbt-collin/releases/latest/download/collin-x86_64-pc-windows-msvc.exe
+gh attestation verify collin.exe --repo IL-William/dbt-collin
+```
+
+Its SHA-256 is on the line of the release's `SHA256SUMS` that ends in
+`collin-x86_64-pc-windows-msvc.exe`; this checks `collin.exe` against it:
+
+```
+curl -sSL https://github.com/IL-William/dbt-collin/releases/latest/download/SHA256SUMS | grep ' collin-x86_64-pc-windows-msvc.exe$' | sed 's/ .*/  collin.exe/' | sha256sum -c
+```
+
+The archive, with the README and the LICENSE, is there too:
+
+```
+curl -LO https://github.com/IL-William/dbt-collin/releases/download/v0.12.2/collin-v0.12.2-x86_64-pc-windows-msvc.zip
+gh attestation verify collin-v0.12.2-x86_64-pc-windows-msvc.zip --repo IL-William/dbt-collin
+unzip collin-v0.12.2-x86_64-pc-windows-msvc.zip
 ```
 
 `collin.exe` is not signed. Downloaded with `curl` in Git Bash it runs as is;
@@ -62,7 +77,7 @@ compiler, which `cargo install` does.
 From source, with Rust 1.82 or later:
 
 ```
-cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.12.1 collin-cli
+cargo install --locked --git https://github.com/IL-William/dbt-collin --tag v0.12.2 collin-cli
 ```
 
 `collin --version` says which collin it is, and the cache it writes names it

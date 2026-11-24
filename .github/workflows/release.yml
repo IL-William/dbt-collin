@@ -6,16 +6,20 @@ name: release
 # together at the commit that was built (0035). The notes list the pull
 # requests merged since the previous release.
 #
-# Before the tag exists, the Windows archive is sent to VirusTotal, and a flag
-# from any engine stops the release (0052). A release cannot be changed once it
-# is out, so the check has to be on the file the release job uploads and before
-# it runs. The Linux and macOS archives are not sent: the Windows .zip is what
-# runs on the Windows machines where that engine sits, and dbt-edith's binary
-# is the one it flagged there. A run by hand with the box ticked
-# publishes anyway. After an outage or an analysis that was slow, "Re-run
-# failed jobs" scans the same artifact again and uploads nothing VirusTotal
-# already has. The result goes into the release's notes, and a small
-# virustotal.json asset carries it to the badge in the README (0053).
+# The Windows leg ships the .zip and also the bare collin.exe under a name with
+# no version, collin-x86_64-pc-windows-msvc.exe, so that dbt-edith can download
+# it from releases/latest/download without knowing the version (0058).
+#
+# Before the tag exists, the Windows archive and that exe are sent to
+# VirusTotal, and a flag from any engine stops the release (0052). A release
+# cannot be changed once it is out, so the check has to be on the files the
+# release job uploads and before it runs. The Linux and macOS archives are not
+# sent: the Windows files are what runs on the Windows machines where that
+# engine sits, and dbt-edith's binary is the one it flagged there. A run by
+# hand with the box ticked publishes anyway. After an outage or an analysis
+# that was slow, "Re-run failed jobs" scans the same artifact again and uploads
+# nothing VirusTotal already has. The result goes into the release's notes, and
+# a small virustotal.json asset carries it to the badge in the README (0053).
 #
 # The tag is made here rather than pushed by hand: a tag pushed with this
 # workflow's token would start no workflow, and one pushed by hand is a step
@@ -133,6 +137,10 @@ jobs:
           mkdir "$dir"
           if [ "$RUNNER_OS" = Windows ]; then
             cp "target/$TARGET/release/collin.exe" LICENSE README.md "$dir/"
+            # The same exe with no version in its name, beside the zip: the
+            # release job attests and sums it with the other collin-* files
+            # (0058). A pull request's build makes it too, so it is built there.
+            cp "target/$TARGET/release/collin.exe" collin-x86_64-pc-windows-msvc.exe
             # Compress-Archive is on the image, so the zip needs no extra tool.
             # pwsh rather than Windows PowerShell 5.1, whose zips use
             # backslashes in entry names. It reads dir from the environment.
@@ -148,18 +156,20 @@ jobs:
           path: |
             collin-*.tar.gz
             collin-*.zip
+            collin-*.exe
           if-no-files-found: error
           retention-days: 7
 
-  # The Windows archive as the release job will upload it, sent to VirusTotal
-  # (0052). Only a release that is due is checked: a pull request's build is not
-  # the file that ships, and the verdicts of near-identical builds can differ. A
-  # flag by any engine fails this job and so blocks the release, unless the run
-  # was started by hand with the override ticked. A file VirusTotal already has
-  # is not sent again, so "Re-run failed jobs" after an outage or an analysis
-  # that was slow looks at the same artifact and reads the same report. The
-  # report is also written as the notes' table and the badge's JSON, uploaded
-  # as the artifact "virustotal" for the release job (0053).
+  # The Windows archive and the bare exe as the release job will upload them,
+  # sent to VirusTotal (0052, 0058). Only a release that is due is checked: a
+  # pull request's build is not the file that ships, and the verdicts of
+  # near-identical builds can differ. A flag by any engine fails this job and
+  # so blocks the release, unless the run was started by hand with the override
+  # ticked. A file VirusTotal already has is not sent again, so "Re-run failed
+  # jobs" after an outage or an analysis that was slow looks at the same
+  # artifact and reads the same report. The report is also written as the
+  # notes' table and the badge's JSON, uploaded as the artifact "virustotal"
+  # for the release job (0053).
   virustotal:
     needs: [version, build]
     if: needs.version.outputs.due == 'true'
@@ -224,7 +234,7 @@ jobs:
             [ "$(jq '(.data.attributes.last_analysis_results // {}) | length' "$1")" -gt 0 ]
           }
 
-          files=("collin-v$VERSION-x86_64-pc-windows-msvc.zip")
+          files=("collin-v$VERSION-x86_64-pc-windows-msvc.zip" "collin-x86_64-pc-windows-msvc.exe")
           shas=()
           ids=()
           for i in "${!files[@]}"; do
@@ -256,10 +266,6 @@ jobs:
             file=${files[$i]}
             sha=${shas[$i]}
             while ! { [ -f "$work/$i.json" ] && has_results "$work/$i.json"; }; do
-              if [ "$SECONDS" -ge "$deadline" ]; then
-                echo "::error::The analysis of $file did not finish; re-run the failed jobs."
-                exit 1
-              fi
               if [ -n "${ids[$i]}" ]; then
                 # Sent by this run: the analysis says when the report is whole.
                 code=$(vt GET "/analyses/${ids[$i]}")
@@ -281,7 +287,15 @@ jobs:
                 [ "$code" = 200 ] || unexpected "the report of $file" "$code"
                 cp "$body" "$work/$i.json"
               fi
-              sleep 60
+              # The deadline is read after a poll, so every file is asked at least
+              # once, whatever the files before it used of the time.
+              if ! { [ -f "$work/$i.json" ] && has_results "$work/$i.json"; }; then
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "::error::The analysis of $file did not finish; re-run the failed jobs."
+                  exit 1
+                fi
+                sleep 60
+              fi
             done
           done
 
@@ -343,7 +357,7 @@ jobs:
           {
             echo "### VirusTotal"
             echo
-            echo "The Windows archive was checked on VirusTotal before this release was published."
+            echo "The Windows archive and the Windows binary were checked on VirusTotal before this release was published."
             echo
             cat "$table"
             if [ -s "$work/details.md" ]; then

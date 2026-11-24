@@ -63,6 +63,7 @@ is built this way, for whoever changes it next.
 | [0055](0055-collin-is-formatted-by-rustfmt-with-a-packed-config.md) | collin is formatted by rustfmt with a packed config | changing `rustfmt.toml`, resolving a conflict in formatted Rust, or formatting a file the fork or a fixture owns |
 | [0056](0056-the-python-and-shell-are-linted-by-pinned-tools.md) | The Python and the shell are linted by pinned tools, fetched by hash | adding or changing a linter rule, bumping Ruff or ShellCheck, or adding a file type or a folder the linters should cover |
 | [0057](0057-the-virustotal-badge-reads-the-json-s-message.md) | The VirusTotal badge reads the JSON's message | changing the README's VirusTotal badge, the host that draws it, or its colour |
+| [0058](0058-a-release-ships-a-windows-exe-with-no-version-in-its-name.md) | A release ships a Windows exe with no version in its name | changing the files the Windows leg of the release workflow uploads, the name of the Windows asset, or what is sent to VirusTotal |
 
 ## The other side of the boundary
 
